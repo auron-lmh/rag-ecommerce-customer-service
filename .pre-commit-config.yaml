@@ -1,0 +1,19 @@
+repos:
+-   repo: https://kkgithub.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+    -   id: trailing-whitespace
+    -   id: end-of-file-fixer
+    -   id: check-yaml
+-   repo: https://kkgithub.com/psf/black
+    rev: 26.5.1
+    hooks:
+    -   id: black
+-   repo: https://kkgithub.com/PyCQA/isort
+    rev: 8.0.1
+    hooks:
+    -   id: isort
+-   repo: https://kkgithub.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+    -   id: ruff

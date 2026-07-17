@@ -1,0 +1,14 @@
+# 虚拟环境与依赖
+.venv/
+__pycache__/
+*.pyc
+
+# IDE 配置
+.idea/
+
+# 环境变量与敏感信息
+.env
+
+# 数据库与日志
+*.sqlite3
+*.log
