@@ -1,10 +1,10 @@
-"""图片解析器 — 智谱GLM-4V / 阿里Qwen-VL + 智能缩放 + 质量检测
+"""图片解析器 — 阿里 Qwen-VL + 智能缩放 + 质量检测
 
 防御层次:
   1. 文件预检 — 大小/MIME/可读性
   2. 质量评估 — 尺寸/模糊度/可用性
   3. 智能缩放 — 过大图片自动压缩后再送API
-  4. API调用 — 双供应商兜底
+  4. API调用 — 百炼 qwen3.7-plus (智谱作为备选)
 """
 
 import base64
@@ -108,30 +108,30 @@ def parse_image(doc: RawDocument) -> ParseResult:
     )
 
     # ═══════════════════════════════════════
-    # 第5层：API调用（智谱优先，百炼备选）
+    # 第5层：API调用（百炼 qwen3.7-plus 优先，智谱备选）
     # ═══════════════════════════════════════
     description = ""
     api_used = ""
 
-    # 尝试智谱GLM-4V-Flash
-    if settings.zhipu_api_key:
-        try:
-            description = _call_zhipu(image_b64, mime_type, prompt)
-            if description:
-                api_used = "zhipu"
-                result.api_cost_estimate = 0.002
-        except Exception as e:
-            result.warnings.append(f"智谱API失败，尝试备选: {e}")
-
-    # 备选百炼Qwen-VL
-    if not description and settings.bailian_api_key:
+    # 首选百炼 Qwen3.7-Plus
+    if settings.bailian_api_key:
         try:
             description = _call_bailian_vision(image_b64, mime_type, prompt)
             if description:
                 api_used = "bailian"
                 result.api_cost_estimate = 0.005
         except Exception as e:
-            result.warnings.append(f"百炼API也失败: {e}")
+            result.warnings.append(f"百炼API失败，尝试备选: {e}")
+
+    # 备选智谱GLM-4V-Flash
+    if not description and settings.zhipu_api_key:
+        try:
+            description = _call_zhipu(image_b64, mime_type, prompt)
+            if description:
+                api_used = "zhipu"
+                result.api_cost_estimate = 0.002
+        except Exception as e:
+            result.warnings.append(f"智谱API也失败: {e}")
 
     # ═══════════════════════════════════════
     # 第6层：结果校验
@@ -187,13 +187,13 @@ def _call_zhipu(image_b64: str, mime_type: str, prompt: str) -> str:
 
 def _call_bailian_vision(image_b64: str, mime_type: str, prompt: str) -> str:
     resp = requests.post(
-        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        f"{settings.bailian_base_url}/chat/completions",
         headers={
             "Authorization": f"Bearer {settings.bailian_api_key}",
             "Content-Type": "application/json",
         },
         json={
-            "model": "qwen-vl-plus",
+            "model": settings.vision_model,
             "messages": [
                 {
                     "role": "user",

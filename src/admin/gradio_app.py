@@ -1,440 +1,408 @@
-"""知识库构建平台 — Gradio 管理后台
+"""知识库入库平台
 
-Tab 1: 上传解析 — 拖拽文件 → 自动解析 → Markdown预览 → 清洗结果
-Tab 2: 文档管理 — 已上传文档列表 / 状态 / 成本 / 删除
-Tab 3: 知识库概览 — 统计 / 成本 / 文档类型分布
+支持的文档类型 (电商场景):
+  PDF    — 售后政策、操作手册、产品说明书
+  Word   — 合同条款、培训资料
+  Excel  — 商品目录、价目表、规格表
+  PPT    — 培训课件、产品推介
+  图片   — 商品图片 (VLM生成文字描述)
+  JSON   — FAQ问答对
+  网页   — 竞品信息、行业政策抓取
+  TXT/MD — 纯文本知识
+
+流程: 上传文件 → 解析预览 → 存入Milvus
 
 启动: python -m src.admin.gradio_app
 """
 
+import logging
 import time
-from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import gradio as gr
 
-from src.ingestion.clean_markdown import clean_markdown
-from src.ingestion.models import ParseStatus
+from src.ingestion.models import DocType, ParseStatus
 from src.ingestion.router import parse_file
 
+logger = logging.getLogger(__name__)
+
+BASE_OUTPUT_DIR = Path(__file__).parent.parent.parent / "data" / "processed"
+
+SUPPORTED_TYPES = {
+    "pdf": "售后政策/操作手册/产品说明书",
+    "word": "合同条款/培训资料",
+    "excel": "商品目录/价目表/规格表",
+    "ppt": "培训课件/产品推介",
+    "image": "商品图片/截图",
+    "faq_json": "FAQ问答对",
+    "web": "网页抓取",
+    "plain_text": "纯文本知识",
+}
+
+
+def _get_filename(path: str, with_ext: bool = True) -> str:
+    p = Path(path)
+    return p.name if with_ext else p.stem
+
+
+def _split_and_save(
+    markdown: str, save_dir: Path, basename: str, doc_type: str
+) -> list[str]:
+    """按文档类型拆分并保存，返回文件名列表
+
+    不同格式拆分规则不同:
+      PDF/PPT → 按 "## 第N页" 拆分
+      Excel   → 按 "## Sheet名" 拆分
+      FAQ     → 按 "## QN:" 拆分
+      其他    → 单文件
+    """
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    if doc_type in ("pdf", "ppt"):
+        # 按页拆分
+        parts = markdown.split("## 第")
+        if len(parts) <= 1:
+            (save_dir / f"{basename}.md").write_text(markdown, encoding="utf-8")
+            return [f"{basename}.md"]
+        files = []
+        for i, part in enumerate(parts):
+            if i == 0:
+                if part.strip():
+                    (save_dir / f"{basename}_page_0.md").write_text(
+                        part.strip(), encoding="utf-8"
+                    )
+                    files.append(f"{basename}_page_0.md")
+                continue
+            filename = f"{basename}_page_{i}.md"
+            (save_dir / filename).write_text(f"## 第{part.strip()}", encoding="utf-8")
+            files.append(filename)
+        return files
+
+    elif doc_type == "excel":
+        # 按 Sheet 拆分
+        parts = markdown.split("## ")
+        if len(parts) <= 1:
+            (save_dir / f"{basename}.md").write_text(markdown, encoding="utf-8")
+            return [f"{basename}.md"]
+        files = []
+        for part in parts:
+            if not part.strip():
+                continue
+            sheet_name = part.split("\n")[0].strip()
+            safe_name = sheet_name.replace("/", "_").replace("\\", "_")
+            filename = f"{basename}_{safe_name}.md"
+            (save_dir / filename).write_text(f"## {part.strip()}", encoding="utf-8")
+            files.append(filename)
+        return files
+
+    elif doc_type == "faq_json":
+        # Q&A 列表，不拆分 (预览整体结构即可)
+        (save_dir / f"{basename}.md").write_text(markdown, encoding="utf-8")
+        return [f"{basename}.md"]
+
+    else:
+        # Word / Image / Web / TXT → 单文件
+        (save_dir / f"{basename}.md").write_text(markdown, encoding="utf-8")
+        return [f"{basename}.md"]
+
+
 # ═══════════════════════════════════════
-# 内存中的文档注册表
-# ═══════════════════════════════════════
 
 
-@dataclass
-class DocRecord:
-    """一条文档记录"""
-
-    id: str
-    filename: str
-    doc_type: str
-    file_size_kb: float
-    status: str
-    chunks: int
-    markdown: str = ""
-    preview: str = ""
-    api_cost: float = 0.0
-    parse_time_ms: float = 0.0
-    uploaded_at: str = ""
-    errors: list = field(default_factory=list)
-
-    def to_row(self):
-        return [
-            self.filename,
-            self.doc_type,
-            f"{self.file_size_kb:.1f} KB",
-            self.status,
-            str(self.chunks),
-            f"¥{self.api_cost:.4f}",
-            self.parse_time_ms,
-            self.uploaded_at,
-        ]
-
-
-class DocStore:
-    """文档注册表（内存）"""
+class ProcessorApp:
 
     def __init__(self):
-        self.docs: dict[str, DocRecord] = {}
-        self._counter = 0
+        self.current_file: Optional[str] = None
+        self.current_markdown: str = ""
+        self.current_doc_type: str = ""
+        self.preview_dir: Optional[Path] = None
+        self.preview_files: list[Path] = []
+        self.file_contents: dict[str, str] = {}
 
-    def add(self, record: DocRecord):
-        self.docs[record.id] = record
+    # ── 上传 + 解析 (合并为一步, 上传即解析) ──
 
-    def get(self, doc_id: str) -> DocRecord | None:
-        return self.docs.get(doc_id)
+    def upload_and_parse(self, file):
+        """上传文件 → 自动解析 → 预览"""
+        if file is None:
+            return [
+                "请上传文件",
+                gr.Dropdown(choices=[], interactive=False),
+                "",
+                "",
+                gr.Button(interactive=False),
+            ]
 
-    def list_all(self) -> list[DocRecord]:
-        return sorted(self.docs.values(), key=lambda d: d.uploaded_at, reverse=True)
+        file_path = file if isinstance(file, str) else file.name
+        self.current_file = file_path
+        basename = Path(file_path).name
+        ext = Path(file_path).suffix.lower()
 
-    def delete(self, doc_id: str):
-        self.docs.pop(doc_id, None)
+        # 显示文件类型说明
+        type_hint = ""
+        for key, hint in SUPPORTED_TYPES.items():
+            if key in ext or (
+                ext in (".jpg", ".jpeg", ".png", ".gif", ".webp") and key == "image"
+            ):
+                type_hint = hint
+                break
+        if not type_hint and file_path.startswith("http"):
+            type_hint = SUPPORTED_TYPES["web"]
 
-    def stats(self) -> dict:
-        docs = self.list_all()
-        total_chunks = sum(d.chunks for d in docs)
-        total_cost = sum(d.api_cost for d in docs)
-        total_size = sum(d.file_size_kb for d in docs)
-        return {
-            "total_docs": len(docs),
-            "total_chunks": total_chunks,
-            "total_cost": round(total_cost, 4),
-            "total_size_kb": round(total_size, 1),
-            "success": sum(1 for d in docs if d.status == "成功"),
-            "failed": sum(1 for d in docs if d.status == "失败"),
-            "by_type": _count_by(docs, "doc_type"),
-        }
-
-
-store = DocStore()
-
-
-def _count_by(docs: list[DocRecord], key: str) -> dict:
-    counts: dict[str, int] = {}
-    for d in docs:
-        v = getattr(d, key, "unknown")
-        counts[v] = counts.get(v, 0) + 1
-    return counts
-
-
-# ═══════════════════════════════════════
-# Tab 1: 上传解析
-# ═══════════════════════════════════════
-
-
-def handle_upload(files: list[str] | None):
-    """处理文件上传 → 解析 → 清洗 → 返回预览"""
-    if not files:
-        return [], "请上传文件", "", _render_stats()
-
-    results = []
-    all_preview = []
-    summary_lines = []
-
-    for file_path in files:
-        if file_path is None:
-            continue
-
-        path = Path(file_path)
-        filename = path.name
-        file_size_kb = path.stat().st_size / 1024
-
-        # 解析
+        # ── 解析 ──
         t0 = time.time()
-        result = parse_file(str(path))
-        elapsed_ms = round((time.time() - t0) * 1000)
+        try:
+            result = parse_file(file_path)
+            elapsed = time.time() - t0
 
-        # 清洗
-        chunks = []
-        if result.status == ParseStatus.SUCCESS and result.markdown:
-            cleaned = clean_markdown(
-                result.markdown, filename, result.document.doc_type
+            if result.status == ParseStatus.FAILED:
+                error = result.errors[0] if result.errors else "未知错误"
+                return [
+                    f"❌ 解析失败: {error}",
+                    gr.Dropdown(choices=[], interactive=False),
+                    "",
+                    f"{type_hint} | {elapsed:.0f}s | ❌",
+                    gr.Button(interactive=False),
+                ]
+
+            markdown = result.markdown or ""
+            if not markdown.strip():
+                return [
+                    "⚠️ 解析结果为空",
+                    gr.Dropdown(choices=[], interactive=False),
+                    "",
+                    f"{type_hint} | {elapsed:.0f}s | ⚠️",
+                    gr.Button(interactive=False),
+                ]
+
+            self.current_markdown = markdown
+            self.current_doc_type = (
+                result.document.doc_type.value if result.document else "unknown"
             )
-            chunks = cleaned
 
-        # 记录
-        doc_id = f"doc_{int(time.time() * 1000)}_{filename}"
-        record = DocRecord(
-            id=doc_id,
-            filename=filename,
-            doc_type=result.document.doc_type.value,
-            file_size_kb=round(file_size_kb, 1),
-            status=(
-                "成功"
-                if result.status == ParseStatus.SUCCESS
-                else ("部分成功" if result.status == ParseStatus.PARTIAL else "失败")
-            ),
-            chunks=len(chunks),
-            markdown=result.markdown[:5000] if result.markdown else "",
-            preview=result.markdown[:800] if result.markdown else "",
-            api_cost=result.api_cost_estimate,
-            parse_time_ms=elapsed_ms,
-            uploaded_at=datetime.now().strftime("%H:%M:%S"),
-            errors=result.errors,
-        )
-        store.add(record)
+            # 按文档类型拆分 + 保存 MD
+            stem = Path(file_path).stem
+            preview_dir = BASE_OUTPUT_DIR / stem
+            file_names = _split_and_save(
+                markdown, preview_dir, stem, self.current_doc_type
+            )
 
-        # 构建预览
-        status_icon = (
-            "✅"
-            if record.status == "成功"
-            else ("⚠️" if record.status == "部分成功" else "❌")
-        )
-        summary_lines.append(
-            f"{status_icon} **{filename}** | {record.doc_type} | "
-            f"{record.chunks} 个chunk | ¥{record.api_cost:.4f} | {elapsed_ms}ms"
-        )
-        if record.errors:
-            for e in record.errors[:3]:
-                summary_lines.append(f"  > ⚠️ {e}")
+            # PDF/PPT: 同时收集 .jpg 页面原图 (拷贝到预览目录)
+            if self.current_doc_type in ("pdf", "ppt"):
+                jpg_dir = Path(file_path).parent / f"{stem}_pages"
+                if jpg_dir.exists():
+                    import shutil
 
-        all_preview.append(f"## 📄 {filename}\n\n")
+                    for jpg in sorted(jpg_dir.glob("page_*.jpg")):
+                        dest = preview_dir / jpg.name
+                        shutil.copy2(jpg, dest)
+                        file_names.append(jpg.name)
 
-        if record.markdown:
-            all_preview.append(record.markdown[:3000])
-        else:
-            all_preview.append("*(无内容)*")
+            self.preview_dir = preview_dir
+            self.preview_files = [preview_dir / fn for fn in file_names]
+            self.file_contents = {}
+            for f in self.preview_files:
+                try:
+                    if f.suffix == ".jpg":
+                        # 图片文件不读取内容，渲染时特殊处理
+                        self.file_contents[f.name] = f"![{f.name}]({f.name})"
+                    else:
+                        self.file_contents[f.name] = f.read_text(encoding="utf-8")
+                except Exception as e:
+                    self.file_contents[f.name] = f"读取出错: {e}"
 
-        all_preview.append("\n\n---\n")
+            # 统计（按格式给不同标签）
+            unit = {"pdf": "页", "ppt": "页", "excel": "Sheet", "faq_json": "条QA"}
+            unit_name = unit.get(self.current_doc_type, "段")
+            item_count = len(self.preview_files)
+            char_count = len(markdown)
+            cost = result.api_cost_estimate
 
-        # 构建表格行
-        results.append(record.to_row())
+            info_line = f"{type_hint} | {item_count}{unit_name} | {char_count}字 | ¥{cost:.4f} | {elapsed:.0f}s | ✅"
 
-    return (
-        results,
-        "\n".join(summary_lines),
-        "\n".join(all_preview),
-        _render_stats(),
-    )
+            # 下拉框标签按格式区分
+            dropdown_label = {
+                "pdf": "预览页面",
+                "ppt": "预览幻灯片",
+                "excel": "预览Sheet",
+                "faq_json": "预览内容",
+            }.get(self.current_doc_type, "预览文件")
 
+            # 首页预览 (转HTML)
+            first_html = ""
+            if file_names:
+                raw = self.file_contents.get(file_names[0], "")
+                import re
 
-def refresh_preview(doc_choice: str):
-    """下拉选择文档 → 显示Markdown预览"""
-    if not doc_choice:
-        return "", ""
+                html = re.sub(
+                    r"!\[([^\]]*)\]\(data:([^)]+)\)",
+                    r'<img src="data:\2" style="max-width:100%">',
+                    raw,
+                )
+                html = html.replace("\n\n", "<br><br>")
+                first_html = (
+                    f'<div style="font-family:sans-serif;line-height:1.8;">{html}</div>'
+                )
 
-    doc_id = doc_choice.split(" | ")[0] if " | " in doc_choice else doc_choice
-    record = store.get(doc_id)
-    if record:
-        info = (
-            f"**文件**: {record.filename}\n"
-            f"**类型**: {record.doc_type} | **大小**: {record.file_size_kb:.1f} KB\n"
-            f"**状态**: {record.status} | **Chunks**: {record.chunks} | "
-            f"**费用**: ¥{record.api_cost:.4f} | **耗时**: {record.parse_time_ms}ms"
-        )
-        return info, record.markdown[:8000] if record.markdown else "*(无内容)*"
-    return "未找到文档", ""
+            return [
+                f"✅ {basename} 解析完成",
+                gr.Dropdown(choices=file_names, label=dropdown_label, interactive=True),
+                first_html,
+                info_line,
+                gr.Button(interactive=True),
+            ]
 
+        except Exception as e:
+            logger.exception("解析异常")
+            return [
+                f"❌ 解析异常: {e}",
+                gr.Dropdown(choices=[], interactive=False),
+                "",
+                f"❌ {e}",
+                gr.Button(interactive=False),
+            ]
 
-# ═══════════════════════════════════════
-# Tab 2: 文档管理
-# ═══════════════════════════════════════
+    # ── 预览：选择文件 ──
 
+    def select_file(self, selected: str):
+        if selected and selected in self.file_contents:
+            raw = self.file_contents[selected]
+            # 将 Markdown 转为 HTML (Gradio HTML 组件支持 data URI 图片)
+            import re
 
-def list_docs():
-    """列出所有文档"""
-    docs = store.list_all()
-    if not docs:
-        return [["(暂无文档)", "", "", "", "", "", "", ""]]
-    return [d.to_row() for d in docs]
+            # 图片: ![...](data:...) → <img src="data:...">
+            html = re.sub(
+                r"!\[([^\]]*)\]\(data:([^)]+)\)",
+                r'<img src="data:\2" style="max-width:100%">',
+                raw,
+            )
+            # 标题: # → <h1>, ## → <h2>
+            html = re.sub(r"^#### (.+)$", r"<h4>\1</h4>", html, flags=re.MULTILINE)
+            html = re.sub(r"^### (.+)$", r"<h3>\1</h3>", html, flags=re.MULTILINE)
+            html = re.sub(r"^## (.+)$", r"<h2>\1</h2>", html, flags=re.MULTILINE)
+            html = re.sub(r"^# (.+)$", r"<h1>\1</h1>", html, flags=re.MULTILINE)
+            # 粗体
+            html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html)
+            # 换行
+            html = html.replace("\n\n", "<br><br>")
+            return (
+                f'<div style="font-family: sans-serif; line-height:1.8;">{html}</div>'
+            )
+        return "选择文件查看内容"
 
+    # ── 存入Milvus ──
 
-def delete_doc(doc_choice: str):
-    """删除文档"""
-    if not doc_choice:
-        return list_docs(), _get_doc_choices(), _render_stats()
+    def save_to_milvus(self):
+        if not self.current_markdown:
+            return "❌ 没有可入库的内容，请先上传文件"
 
-    doc_id = doc_choice.split(" | ")[0] if " | " in doc_choice else doc_choice
-    store.delete(doc_id)
-    return list_docs(), _get_doc_choices(), _render_stats()
+        t0 = time.time()
+        try:
+            from src.chunking.router import chunk_document
+            from src.embedding.milvus_store import MilvusStore
+            from src.embedding.pipeline import IndexingPipeline
+            from src.ingestion.models import DocType
 
+            pipeline = IndexingPipeline()
+            store = pipeline.store
+            basename = _get_filename(self.current_file, with_ext=True)
 
-def _get_doc_choices() -> list[str]:
-    docs = store.list_all()
-    return [f"{d.id} | {d.filename} ({d.chunks} chunks)" for d in docs]
+            # ── 去重: 检查是否已入库, 有则先删 ──
+            deleted_count = store.delete_by_source(basename)
+            dedup_msg = (
+                f"(已清除旧数据 {deleted_count} 条) " if deleted_count > 0 else ""
+            )
 
+            try:
+                doc_type = DocType(self.current_doc_type)
+            except ValueError:
+                doc_type = DocType.PLAIN_TEXT
 
-# ═══════════════════════════════════════
-# Tab 3: 知识库概览
-# ═══════════════════════════════════════
+            report = pipeline.run_from_text(self.current_markdown, basename, doc_type)
 
+            elapsed = time.time() - t0
+            inserted = report.get("inserted", 0)
+            status = report.get("status", "unknown")
 
-def _render_stats() -> str:
-    s = store.stats()
-    if s["total_docs"] == 0:
-        return "### 📊 知识库为空\n\n上传文件开始构建知识库。"
+            if status == "ok":
+                return f"✅ {dedup_msg}已入库: {inserted} 个向量, 耗时 {elapsed:.0f}s"
+            elif status == "partial":
+                return f"⚠️ {dedup_msg}部分入库: {inserted} 个向量, 错误: {report.get('errors', [])}"
+            else:
+                return f"❌ 入库失败: {report.get('error', '未知')}"
+        except Exception as e:
+            return f"❌ 入库异常: {e}"
 
-    type_md = "\n".join(f"- **{t}**: {c} 个" for t, c in s["by_type"].items())
+    # ── UI ──
 
-    return f"""### 📊 知识库概览
+    def create_interface(self):
+        with gr.Blocks(title="知识库入库平台") as app:
+            gr.Markdown("""## 📥 电商客服知识库 · 入库平台
 
-| 指标 | 数值 |
-|------|------|
-| 📁 文档总数 | {s['total_docs']} |
-| ✅ 成功 | {s['success']} |
-| ❌ 失败 | {s['failed']} |
-| 📝 清洗后Chunk | {s['total_chunks']} |
-| 💰 API总费用 | ¥{s['total_cost']:.4f} |
-| 💾 文件总大小 | {s['total_size_kb']:.1f} KB |
+支持所有电商场景文档: **PDF**(售后政策/手册) **Word**(合同/培训) **Excel**(商品目录/价目表) **PPT**(课件) **图片**(商品图→文字描述) **JSON**(FAQ问答对) **网页**(竞品抓取) **TXT/MD**(纯文本)
+            """)
 
-### 📂 文档类型分布
-
-{type_md}
-"""
-
-
-# ═══════════════════════════════════════
-# Gradio UI
-# ═══════════════════════════════════════
-
-HEADER = """
-# 🏪 电商客服知识库构建平台
-
-上传商品信息、售后政策、FAQ问答对，自动解析为结构化知识。
-"""
-
-CSS = """
-.gradio-container { max-width: 1200px !important; }
-footer { visibility: hidden; }
-"""
-
-
-def create_app() -> gr.Blocks:
-    with gr.Blocks(title="知识库构建平台") as app:
-        gr.Markdown(HEADER)
-
-        # ── 共享状态栏 ──
-        stats_md = gr.Markdown(_render_stats())
-
-        with gr.Tabs():
-            # ═══════════════════════════
-            # Tab 1: 上传解析
-            # ═══════════════════════════
-            with gr.Tab("📤 上传解析"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.Markdown(
-                            "### 选择文件\n支持 PDF / Word / Excel / 图片 / JSON"
-                        )
-                        upload = gr.File(
-                            label="拖拽或点击上传",
-                            file_count="multiple",
-                            file_types=[
-                                ".pdf",
-                                ".docx",
-                                ".xlsx",
-                                ".pptx",
-                                ".png",
-                                ".jpg",
-                                ".jpeg",
-                                ".webp",
-                                ".json",
-                                ".txt",
-                                ".md",
-                            ],
-                        )
-                        upload_btn = gr.Button(
-                            "🔍 开始解析", variant="primary", size="lg"
-                        )
-
-                        gr.Markdown("---")
-                        gr.Markdown("### 📋 解析摘要")
-                        summary = gr.Markdown("等待上传...")
-
-                    with gr.Column(scale=2):
-                        gr.Markdown("### 📝 Markdown预览")
-                        preview = gr.Markdown(
-                            "选择文件并点击「开始解析」查看预览", label="预览"
-                        )
-
-                gr.Markdown("---")
-                gr.Markdown("### 📋 本次上传记录")
-                result_table = gr.Dataframe(
-                    headers=[
-                        "文件名",
-                        "类型",
-                        "大小",
-                        "状态",
-                        "Chunks",
-                        "费用",
-                        "耗时ms",
-                        "时间",
+            with gr.Row():
+                upload = gr.File(
+                    label="上传文件 (拖拽或点击)",
+                    file_types=[
+                        ".pdf",
+                        ".docx",
+                        ".doc",
+                        ".xlsx",
+                        ".xls",
+                        ".pptx",
+                        ".ppt",
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".webp",
+                        ".gif",
+                        ".bmp",
+                        ".json",
+                        ".txt",
+                        ".md",
                     ],
-                    label="解析记录",
+                )
+
+            status = gr.Textbox(label="状态", value="等待上传...", interactive=False)
+
+            with gr.Row():
+                file_dropdown = gr.Dropdown(
+                    choices=[],
+                    label="预览文件 (选择查看不同页面)",
                     interactive=False,
                 )
+                content = gr.HTML(label="文件内容")
 
-                upload_btn.click(
-                    fn=handle_upload,
-                    inputs=[upload],
-                    outputs=[result_table, summary, preview, stats_md],
-                )
+            info_line = gr.Textbox(label="文件信息", interactive=False)
 
-            # ═══════════════════════════
-            # Tab 2: 文档管理
-            # ═══════════════════════════
-            with gr.Tab("📂 文档管理"):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        gr.Markdown("### 选择文档预览")
-                        tab2_doc_selector = gr.Dropdown(
-                            label="已上传文档",
-                            choices=_get_doc_choices(),
-                            interactive=True,
-                        )
-                        doc_info = gr.Markdown("选择一个文档查看详情")
+            save_btn = gr.Button("🚀 存入知识库", variant="primary", interactive=False)
+            save_result = gr.Textbox(label="入库结果", interactive=False)
 
-                        with gr.Row():
-                            refresh_btn = gr.Button("🔄 刷新预览", variant="secondary")
-                            delete_btn = gr.Button("🗑️ 删除文档", variant="stop")
+            # ── 事件 ──
+            upload.change(
+                fn=self.upload_and_parse,
+                inputs=upload,
+                outputs=[status, file_dropdown, content, info_line, save_btn],
+            )
+            file_dropdown.change(
+                fn=self.select_file,
+                inputs=file_dropdown,
+                outputs=content,
+            )
+            save_btn.click(
+                fn=self.save_to_milvus,
+                inputs=[],
+                outputs=save_result,
+            )
 
-                    with gr.Column(scale=2):
-                        doc_preview = gr.Markdown(
-                            "### 📝 文档内容\n\n选择一个文档查看Markdown内容",
-                            label="文档内容",
-                        )
-
-                gr.Markdown("---")
-                gr.Markdown("### 📋 全部文档")
-                doc_list = gr.Dataframe(
-                    headers=[
-                        "文件名",
-                        "类型",
-                        "大小",
-                        "状态",
-                        "Chunks",
-                        "费用",
-                        "耗时ms",
-                        "时间",
-                    ],
-                    label="文档列表",
-                    interactive=False,
-                    value=list_docs(),
-                )
-
-                refresh_table_btn = gr.Button("🔄 刷新列表", variant="secondary")
-
-                refresh_btn.click(
-                    fn=refresh_preview,
-                    inputs=[tab2_doc_selector],
-                    outputs=[doc_info, doc_preview],
-                )
-                delete_btn.click(
-                    fn=delete_doc,
-                    inputs=[tab2_doc_selector],
-                    outputs=[doc_list, tab2_doc_selector, stats_md],
-                )
-                refresh_table_btn.click(
-                    fn=list_docs,
-                    inputs=[],
-                    outputs=[doc_list],
-                )
-
-            # ═══════════════════════════
-            # Tab 3: 知识库概览
-            # ═══════════════════════════
-            with gr.Tab("📊 知识库概览"):
-                stats_md_tab = gr.Markdown(_render_stats())
-                refresh_stats_btn = gr.Button("🔄 刷新统计", variant="secondary")
-                refresh_stats_btn.click(
-                    fn=lambda: _render_stats(), outputs=[stats_md_tab]
-                )
-
-    return app
+        return app
 
 
 def main():
-    app = create_app()
-    app.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
-        share=False,
-        show_error=True,
-        theme=gr.themes.Soft(),
-        css=CSS,
-    )
+    app = ProcessorApp()
+    app.create_interface().launch()
 
 
 if __name__ == "__main__":

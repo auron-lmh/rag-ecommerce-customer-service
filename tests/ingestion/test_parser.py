@@ -96,10 +96,7 @@ class TestPDFWithoutAPI:
     """PDF解析需要API Key时给出明确错误"""
 
     def test_pdf_without_api_key(self):
-        """使用最小的合法PDF文件 + 空API Key → 应返回明确错误而非崩溃"""
-        import os
-
-        # 构造一个最小的合法PDF文件（通过 validate_file + MIME检测）
+        """不配置 BAILIAN_API_KEY 时 PDF 解析应返回明确错误"""
         minimal_pdf = (
             b"%PDF-1.0\n"
             b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -114,16 +111,17 @@ class TestPDFWithoutAPI:
             f.write(minimal_pdf)
             tmp_path = f.name
 
-        old_key = os.environ.get("BAILIAN_API_KEY", "")
-        os.environ["BAILIAN_API_KEY"] = ""
+        from src.config import settings
+
+        old_key = settings.bailian_api_key
+        settings.bailian_api_key = ""
 
         try:
             result = parse_file(tmp_path, DocType.PDF)
             assert result.status == ParseStatus.FAILED
             assert any(
-                "API" in e or "api" in e or "BAILIAN" in e for e in result.errors
-            ), f"Expected API key error, got: {result.errors}"
+                "BAILIAN" in e for e in result.errors
+            ), f"Expected BAILIAN key error, got: {result.errors}"
         finally:
             Path(tmp_path).unlink(missing_ok=True)
-            if old_key:
-                os.environ["BAILIAN_API_KEY"] = old_key
+            settings.bailian_api_key = old_key

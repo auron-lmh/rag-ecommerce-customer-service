@@ -7,6 +7,12 @@ pydantic-settings 自动从以下来源加载（优先级从高到低）：
 
 因此字段默认值应设为空字符串或合理默认值，
 NOT os.getenv() —— 后者在类定义时求值，此时 .env 尚未加载。
+
+模型方案 (2026-07):
+  PDF 解析:   qwen3.7-plus (替代已下线的 qwen-vl-max)
+  Embedding:  qwen3-vl-embedding → 2048-dim (文本+图片同一向量空间)
+  全文检索:   BM25 + Dense (WeightedRanker)
+  Reranker:   qwen3-vl-rerank (可选)
 """
 
 from pathlib import Path
@@ -19,11 +25,20 @@ PROJECT_ROOT = Path(__file__).parent.parent
 class Settings(BaseSettings):
     """应用配置，自动从 .env / 环境变量读取"""
 
-    # ========== 阿里云百炼 ==========
+    # ========== 阿里云百炼 / DashScope ==========
     bailian_api_key: str = ""
     bailian_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     bailian_doc_parse_url: str = (
         "https://dashscope.aliyuncs.com/api/v1/services/fileparser/parse"
+    )
+    # DashScope 专有 API 端点（Embedding / Reranker 不走 OpenAI 兼容协议）
+    dashscope_embedding_url: str = (
+        "https://dashscope.aliyuncs.com/api/v1/services/embeddings"
+        "/multimodal-embedding/multimodal-embedding"
+    )
+    dashscope_rerank_url: str = (
+        "https://dashscope.aliyuncs.com/api/v1/services/rerank"
+        "/text-rerank/text-rerank"
     )
 
     # ========== 智谱 GLM ==========
@@ -41,23 +56,31 @@ class Settings(BaseSettings):
     # ========== LLM 主/备模型 ==========
     default_model: str = "deepseek-chat"
     fallback_model: str = "qwen-plus"
-    vision_model: str = "glm-4v-flash"  # 图片理解（性价比高）
-    ocr_model: str = "qwen-vl-ocr-latest"  # 文档OCR
+    vision_model: str = "qwen3.7-plus"  # 图片理解（替代已下线 glm-4v-flash）
+    ocr_model: str = "qwen3.7-plus"  # PDF OCR（替代已下线 qwen-vl-max）
 
     # ========== 文档解析 ==========
     pdf_max_pages: int = 50  # PDF单次最大解析页数
     pdf_ocr_enabled: bool = True  # 扫描件自动OCR
     doc_parse_timeout: int = 120  # 文档解析超时(秒)
 
-    # ========== Embedding ==========
-    embedding_model: str = "BAAI/bge-m3"
-    embedding_dim: int = 1024
-    embedding_device: str = "cpu"
+    # ========== Embedding (DashScope 多模态) ==========
+    embedding_model: str = "qwen3-vl-embedding"
+    embedding_dim: int = 2048  # qwen3-vl-embedding 支持 256~2560
+    embedding_rpm: int = 120  # DashScope Embedding API 限流 (RPM)
+
+    # ========== Reranker (DashScope) ==========
+    reranker_model: str = "qwen3-vl-rerank"
+    reranker_enabled: bool = True  # 是否启用重排序
+    reranker_top_n: int = 5  # 重排序后返回数
 
     # ========== Milvus ==========
-    milvus_host: str = "127.0.0.1"
+    milvus_host: str = "192.168.191.128"
     milvus_port: int = 19530
+    milvus_user: str = "root"
+    milvus_password: str = "Milvus"
     milvus_collection: str = "ecommerce_knowledge"
+    milvus_dim: int = 2048  # qwen3-vl-embedding 输出维度
 
     # ========== Redis ==========
     redis_host: str = "127.0.0.1"

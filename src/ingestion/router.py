@@ -63,6 +63,8 @@ def parse_file(file_path: str, doc_type: Optional[DocType] = None) -> ParseResul
             return _route_web(doc)
         elif doc_type == DocType.FAQ_JSON:
             return _route_faq_json(doc)
+        elif doc_type in (DocType.PLAIN_TEXT,):
+            return _route_plaintext(doc)
         else:
             return ParseResult(
                 document=doc,
@@ -146,3 +148,9 @@ def _route_faq_json(doc: RawDocument) -> ParseResult:
     from .parser_faq import parse_faq_json
 
     return parse_faq_json(doc)
+
+
+def _route_plaintext(doc: RawDocument) -> ParseResult:
+    from .parser_plaintext import parse_plaintext
+
+    return parse_plaintext(doc)
