@@ -81,6 +81,10 @@ def parse_image(doc: RawDocument) -> ParseResult:
         result.errors.append(f"读取图片失败: {e}")
         result.parse_time_ms = (time.time() - t0) * 1000
         return result
+    finally:
+        # 清理 smart_resize 产生的临时文件
+        if image_to_process != doc.file_path:
+            Path(image_to_process).unlink(missing_ok=True)
 
     image_b64 = base64.b64encode(image_data).decode()
 

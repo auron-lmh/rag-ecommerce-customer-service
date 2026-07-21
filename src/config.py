@@ -1,12 +1,18 @@
-"""统一配置中心 — 所有模块从这里读取配置"""
+"""统一配置中心 — 所有模块从这里读取配置
 
-import os
+pydantic-settings 自动从以下来源加载（优先级从高到低）：
+  1. 环境变量 (export BAILIAN_API_KEY=...)
+  2. .env 文件
+  3. 类定义的默认值
+
+因此字段默认值应设为空字符串或合理默认值，
+NOT os.getenv() —— 后者在类定义时求值，此时 .env 尚未加载。
+"""
+
 from pathlib import Path
 
-from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 
-load_dotenv()
 PROJECT_ROOT = Path(__file__).parent.parent
 
 
@@ -14,30 +20,23 @@ class Settings(BaseSettings):
     """应用配置，自动从 .env / 环境变量读取"""
 
     # ========== 阿里云百炼 ==========
-    bailian_api_key: str = os.getenv("BAILIAN_API_KEY", "")
-    bailian_base_url: str = os.getenv(
-        "BAILIAN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    bailian_doc_parse_url: str = os.getenv(
-        "BAILIAN_DOC_PARSE_URL",
-        "https://dashscope.aliyuncs.com/api/v1/services/fileparser/parse",
+    bailian_api_key: str = ""
+    bailian_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    bailian_doc_parse_url: str = (
+        "https://dashscope.aliyuncs.com/api/v1/services/fileparser/parse"
     )
 
     # ========== 智谱 GLM ==========
-    zhipu_api_key: str = os.getenv("ZHIPU_API_KEY", "")
-    zhipu_base_url: str = os.getenv(
-        "ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"
-    )
+    zhipu_api_key: str = ""
+    zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
 
     # ========== DeepSeek ==========
-    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
-    deepseek_base_url: str = os.getenv(
-        "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"
-    )
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com/v1"
 
     # ========== OpenAI 兼容 ==========
-    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
-    openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
 
     # ========== LLM 主/备模型 ==========
     default_model: str = "deepseek-chat"
@@ -56,13 +55,13 @@ class Settings(BaseSettings):
     embedding_device: str = "cpu"
 
     # ========== Milvus ==========
-    milvus_host: str = os.getenv("MILVUS_HOST", "127.0.0.1")
-    milvus_port: int = int(os.getenv("MILVUS_PORT", "19530"))
+    milvus_host: str = "127.0.0.1"
+    milvus_port: int = 19530
     milvus_collection: str = "ecommerce_knowledge"
 
     # ========== Redis ==========
-    redis_host: str = os.getenv("REDIS_HOST", "127.0.0.1")
-    redis_port: int = int(os.getenv("REDIS_PORT", "6379"))
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
     redis_db: int = 0
 
     # ========== 检索参数 ==========

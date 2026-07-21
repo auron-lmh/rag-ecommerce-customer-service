@@ -544,17 +544,13 @@ def _apply_sharpen(img: Image.Image) -> Image.Image:
     """Unsharp Mask 锐化
 
     原理: 原图 + (原图 - 高斯模糊) × amount
-    这比直接加Laplacian边缘更自然，不易出现光晕。
+    纯 numpy 实现，比 PIL Image.blend 更可控且支持任意 amount。
     """
     from PIL import ImageFilter
 
-    # 三步法Unsharp Mask
     blurred = img.filter(ImageFilter.GaussianBlur(radius=2))
-    # 原图 - 模糊图 = 高频细节
-    # 原图 + 高频细节 × 1.5 = 锐化图
-    img_sharp = Image.blend(img, blurred, alpha=-0.3)  # 负alpha = 原图+(原图-模糊)×0.3
 
-    # 手动实现（更可控）
+    # 原图 + (原图 - 模糊图) × amount
     arr = np.array(img).astype(np.float64)
     blur_arr = np.array(blurred).astype(np.float64)
     sharpened = arr + (arr - blur_arr) * 1.5  # amount = 1.5

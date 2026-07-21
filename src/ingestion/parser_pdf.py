@@ -227,10 +227,19 @@ def _call_bailian_parse(file_path: str, api_key: str) -> str:
     return body["choices"][0]["message"]["content"]
 
 
-def _poll_bailian_task(task_id: str, api_key: str, max_retries: int = 15) -> str:
-    """轮询百炼异步解析任务 → 返回Markdown"""
+def _poll_bailian_task(
+    task_id: str,
+    api_key: str,
+    max_retries: int = 15,
+    base_delay: float = 2.0,
+) -> str:
+    """轮询百炼异步解析任务 → 返回Markdown
+
+    指数退避: 2s → 2.6s → 3.4s → ... → 上限10s
+    """
     for i in range(max_retries):
-        time.sleep(2)
+        delay = min(base_delay * (1.3**i), 10.0)
+        time.sleep(delay)
 
         resp = requests.get(
             f"https://dashscope.aliyuncs.com/api/v1/services/fileparser/parse/{task_id}",

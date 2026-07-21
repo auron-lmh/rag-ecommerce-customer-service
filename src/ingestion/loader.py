@@ -1,6 +1,7 @@
 """模块1 数据加载器 — 批量导入 + 进度反馈 + 示例数据生成"""
 
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,8 @@ from src.config import settings
 from .clean_markdown import clean_markdown
 from .models import DocType, ParseStatus
 from .router import parse_file
+
+logger = logging.getLogger(__name__)
 
 
 def load_directory(
@@ -79,7 +82,8 @@ def load_directory(
             continue
 
         file_str = str(file_path)
-        print(f"[{i+1}/{len(files)}] 解析: {file_path.name} ...", end=" ")
+        total = len(files)
+        logger.info("[%d/%d] 解析: %s", i + 1, total, file_path.name)
 
         t_start = time.time()
 
@@ -107,8 +111,13 @@ def load_directory(
 
             total_api_cost += result.api_cost_estimate
             elapsed = (time.time() - t_start) * 1000
-            print(
-                f"✅ {chunk_count}块 | ¥{result.api_cost_estimate:.4f} | {elapsed:.0f}ms"
+            logger.info(
+                "[%d/%d] ✅ %d块 | ¥%.4f | %.0fms",
+                i + 1,
+                total,
+                chunk_count,
+                result.api_cost_estimate,
+                elapsed,
             )
 
         elif result.status == ParseStatus.PARTIAL:
@@ -118,11 +127,21 @@ def load_directory(
                 )
                 all_cleaned.extend(cleaned)
             total_api_cost += result.api_cost_estimate
-            print(f"⚠️ 部分成功 | 警告: {result.warnings}")
+            logger.warning(
+                "[%d/%d] ⚠️ 部分成功 | 警告: %s",
+                i + 1,
+                total,
+                result.warnings,
+            )
 
         else:
             errors.extend(result.errors)
-            print(f"❌ {result.errors[0] if result.errors else '未知错误'}")
+            logger.error(
+                "[%d/%d] ❌ %s",
+                i + 1,
+                total,
+                result.errors[0] if result.errors else "未知错误",
+            )
 
     # 汇总
     return {

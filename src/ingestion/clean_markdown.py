@@ -98,8 +98,15 @@ def _split_paragraphs(text: str) -> list[str]:
                 current = []
                 for line in lines:
                     line = line.strip()
-                    if line.startswith("#") or line.startswith("**"):
-                        # 标题行 → 保存之前的段落，开始新的
+                    # 标题行 → 保存之前的段落，开始新的
+                    # ★ 只有整行为加粗短文本（≤60字，形如 **小标题**）才视为伪标题
+                    is_bold_pseudo_heading = (
+                        line.startswith("**")
+                        and line.endswith("**")
+                        and len(line) <= 60
+                        and line.count("**") == 2
+                    )
+                    if line.startswith("#") or is_bold_pseudo_heading:
                         if current:
                             paragraphs.append(" ".join(current))
                             current = []

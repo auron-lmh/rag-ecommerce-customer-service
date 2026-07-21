@@ -30,18 +30,27 @@ def parse_file(file_path: str, doc_type: Optional[DocType] = None) -> ParseResul
     if doc_type is None:
         doc_type = _detect_type(file_path)
 
-    path = Path(file_path)
-    doc = RawDocument(
-        file_path=str(path.resolve()),
-        doc_type=doc_type,
-        file_size_bytes=path.stat().st_size if path.exists() else 0,
-        title=path.stem,
-    )
+    is_url = file_path.startswith(("http://", "https://"))
+    if is_url:
+        # URL 不能用 Path.resolve() —— Windows 上会变成 C:\https:\... 垃圾路径
+        from urllib.parse import urlparse
 
-    # 不支持的格式
-    if doc_type == DocType.PLAIN_TEXT and file_path.startswith("http"):
-        doc.doc_type = DocType.WEB
-        doc_type = DocType.WEB
+        parsed = urlparse(file_path)
+        title = parsed.path.rstrip("/").split("/")[-1] or parsed.netloc
+        doc = RawDocument(
+            file_path=file_path,
+            doc_type=DocType.WEB if doc_type == DocType.PLAIN_TEXT else doc_type,
+            file_size_bytes=0,
+            title=title,
+        )
+    else:
+        path = Path(file_path)
+        doc = RawDocument(
+            file_path=str(path.resolve()),
+            doc_type=doc_type,
+            file_size_bytes=path.stat().st_size if path.exists() else 0,
+            title=path.stem,
+        )
 
     try:
         if doc_type == DocType.PDF:

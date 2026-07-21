@@ -133,7 +133,14 @@ def _parse_word(doc: RawDocument, t0: float, result: ParseResult) -> ParseResult
 
         rows = []
         for row in table.rows:
-            cells = [cell.text.strip().replace("\n", " ") for cell in row.cells]
+            cells = []
+            for cell in row.cells:
+                try:
+                    cell_text = cell.text.strip().replace("\n", " ")
+                except Exception:
+                    # 合并单元格可能导致 cell.text 抛异常
+                    cell_text = ""
+                cells.append(cell_text)
             rows.append("| " + " | ".join(cells) + " |")
 
         if rows:
