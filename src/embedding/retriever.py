@@ -19,6 +19,13 @@ from .models import SearchResponse
 logger = logging.getLogger(__name__)
 
 
+def _get_cache():
+    """延迟导入缓存模块"""
+    from src.engineering import get_cache
+
+    return get_cache()
+
+
 class Retriever:
     """Hybrid 检索器 — Embedder + MilvusStore + Reranker
 
@@ -75,6 +82,14 @@ class Retriever:
         if use_rerank is None:
             use_rerank = settings.reranker_enabled
 
+        # ── 查询缓存 ──
+        cache = _get_cache()
+        cache_key = f"{query}:{top_k}:{use_hybrid}:{use_rerank}"
+        cached = cache.get_query_result(cache_key)
+        if cached:
+            logger.debug("缓存命中: %s", query[:50])
+            return cached
+
         # ── 构建过滤表达式 ──
         filter_parts = []
         if filter_by_doc_type:
@@ -128,6 +143,9 @@ class Retriever:
                     elapsed_ms=response.elapsed_ms,
                     threshold=response.threshold,
                 )
+
+        # ── 缓存结果 ──
+        cache.set_query_result(cache_key, response, ttl=3600)
 
         return response
 

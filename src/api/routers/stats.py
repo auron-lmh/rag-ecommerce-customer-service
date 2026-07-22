@@ -1,4 +1,4 @@
-"""模块12 统计路由 — GET /api/stats, GET /api/health"""
+"""模块12 统计路由 — GET /api/stats, GET /api/health, GET /api/cache/stats"""
 
 from fastapi import APIRouter, Depends
 
@@ -7,6 +7,7 @@ from src.api.models import HealthResponse, StatsResponse
 from src.config import settings
 from src.embedding.milvus_store import MilvusStore
 from src.embedding.retriever import Retriever
+from src.engineering import get_cache
 
 router = APIRouter(prefix="/api", tags=["监控"])
 
@@ -46,3 +47,18 @@ async def health(
         reranker=result.get("reranker", "unknown"),
         collection=result.get("collection", {}),
     )
+
+
+@router.get("/cache/stats")
+async def cache_stats() -> dict:
+    """缓存统计信息"""
+    cache = get_cache()
+    return cache.stats()
+
+
+@router.delete("/cache")
+async def clear_cache() -> dict:
+    """清空所有缓存"""
+    cache = get_cache()
+    cache.clear()
+    return {"status": "ok", "message": "缓存已清空"}
