@@ -16,10 +16,9 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Poetry 并配置镜像
-RUN pip install poetry \
-    && poetry config virtualenvs.create false \
-    && poetry config repositories.tuna https://pypi.tuna.tsinghua.edu.cn/simple/
+# 安装 Poetry (指定版本，避免兼容性问题)
+RUN pip install "poetry>=2.0.0" \
+    && poetry config virtualenvs.create false
 
 # 复制依赖文件
 COPY pyproject.toml poetry.lock ./
