@@ -130,10 +130,27 @@ class DegradationStrategy:
                         rewritten_query=rewritten,
                     )
 
-        # ── Level 3: 联网搜索 ──
+        # ── Level 3: 查询扩展 (Multi-Query + HyDE) ──
+        logger.info("Level 3 尝试查询扩展: %s", query[:50])
+        expanded_response = self._expand_and_search(query, top_k)
+        expanded_score = self._max_score(expanded_response)
+        if expanded_score > best_score + IMPROVEMENT_THRESHOLD:
+            best_response = expanded_response
+            best_score = expanded_score
+            logger.info("Level 3 命中: 查询扩展, max_score=%.4f", expanded_score)
+            if self._is_sufficient(expanded_response, threshold):
+                return DegradationResult(
+                    response=expanded_response,
+                    level=3,
+                    method="expanded",
+                    original_query=query,
+                    rewritten_query=query,
+                )
+
+        # ── Level 4: 联网搜索 ──
         web_results = self._web_search(query)
         if web_results:
-            logger.info("Level 3 命中: web_search, %d results", len(web_results))
+            logger.info("Level 4 命中: web_search, %d results", len(web_results))
             # 将联网搜索结果转换为 SearchResult
             web_search_results = [
                 SearchResult(
@@ -155,15 +172,15 @@ class DegradationStrategy:
             )
             return DegradationResult(
                 response=web_response,
-                level=3,
+                level=4,
                 method="web_search",
                 original_query=query,
                 rewritten_query=best_query,
                 web_results=web_results,
             )
 
-        # ── Level 4: 兜底 ──
-        logger.info("Level 4 兜底: query=%s", query)
+        # ── Level 5: 兜底 ──
+        logger.info("Level 5 兜底: query=%s", query)
         fallback_response = SearchResponse(
             query=query,
             results=[],
@@ -173,7 +190,7 @@ class DegradationStrategy:
         )
         return DegradationResult(
             response=fallback_response,
-            level=4,
+            level=5,
             method="fallback",
             original_query=query,
             rewritten_query=best_query,
@@ -226,6 +243,71 @@ class DegradationStrategy:
         except Exception as e:
             logger.warning("查询改写失败: %s", e)
             return query
+
+    def _expand_and_search(self, query: str, top_k: int) -> SearchResponse:
+        """查询扩展 + 并行检索 + 合并结果
+
+        使用 Multi-Query 扩展，对每个子查询检索，合并去重后返回最佳结果。
+        """
+        from .query_expansion import get_query_expander
+
+        expander = get_query_expander()
+        expansion = expander.expand(query)
+
+        queries = expansion["queries"]
+        hyde_doc = expansion.get("hyde_doc", "")
+
+        logger.info("查询扩展: %s → %d 个子查询", query[:50], len(queries))
+
+        # 并行检索所有子查询
+        all_results = []
+        for q in queries:
+            try:
+                response = self.retriever.search(
+                    query=q,
+                    top_k=top_k,
+                    use_rerank=False,  # 扩展查询不重排序，最后统一排序
+                )
+                all_results.extend(response.results)
+            except Exception as e:
+                logger.warning("扩展查询检索失败 [%s]: %s", q[:30], e)
+
+        # HyDE 文档检索
+        if hyde_doc:
+            try:
+                hyde_response = self.retriever.search(
+                    query=hyde_doc,
+                    top_k=top_k,
+                    use_rerank=False,
+                )
+                all_results.extend(hyde_response.results)
+            except Exception as e:
+                logger.warning("HyDE 检索失败: %s", e)
+
+        # 去重（按 chunk_id）
+        seen = set()
+        unique_results = []
+        for r in all_results:
+            if r.chunk_id not in seen:
+                seen.add(r.chunk_id)
+                unique_results.append(r)
+
+        # 按分数排序
+        unique_results.sort(key=lambda r: r.score, reverse=True)
+
+        # 取 top_k
+        final_results = unique_results[:top_k]
+
+        # 计算总耗时
+        total_ms = sum(r.metadata.get("elapsed_ms", 0) for r in final_results)
+
+        return SearchResponse(
+            query=query,
+            results=final_results,
+            total_found=len(final_results),
+            elapsed_ms=total_ms,
+            threshold=0.0,
+        )
 
     def _web_search(self, query: str) -> list[dict]:
         """联网搜索兜底
