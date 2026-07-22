@@ -7,6 +7,9 @@ FROM python:3.13-slim
 # 设置工作目录
 WORKDIR /app
 
+# 使用国内 PyPI 镜像源
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple/
+
 # 安装系统依赖
 RUN apt-get update && apt-get install -y \
     curl \
@@ -14,6 +17,9 @@ RUN apt-get update && apt-get install -y \
 
 # 安装 Poetry
 RUN pip install poetry
+
+# 配置 Poetry 使用国内镜像
+RUN poetry source add tuna https://pypi.tuna.tsinghua.edu.cn/simple/ --priority default
 
 # 复制依赖文件
 COPY pyproject.toml poetry.lock ./
