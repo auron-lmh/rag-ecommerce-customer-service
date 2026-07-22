@@ -20,8 +20,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# API 地址
-API_BASE_URL = "http://localhost:8000"
+# API 地址 (Docker 容器内使用服务名)
+API_BASE_URL = "http://rag-api:8000"
 
 # 人工介入数据库
 HITL_DB = Path(__file__).parent.parent.parent / "data" / "hitl_requests.db"
