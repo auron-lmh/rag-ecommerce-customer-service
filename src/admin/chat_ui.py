@@ -92,19 +92,7 @@ def clear_history():
 def create_chat_ui() -> gr.Blocks:
     """创建聊天界面"""
 
-    with gr.Blocks(
-        title="电商智能客服",
-        theme=gr.themes.Soft(),
-        css="""
-        .status-bar {
-            background: #f0f0f0;
-            padding: 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            color: #666;
-        }
-        """,
-    ) as app:
+    with gr.Blocks(title="电商智能客服") as app:
         gr.Markdown("""
             # 🤖 电商智能客服
 
@@ -123,7 +111,6 @@ def create_chat_ui() -> gr.Blocks:
                     label="对话",
                     height=400,
                     show_label=False,
-                    bubble_full_width=False,
                 )
 
                 with gr.Row():
