@@ -113,7 +113,6 @@ def create_chat_ui() -> gr.Blocks:
                     label="对话",
                     height=400,
                     show_label=False,
-                    type="messages",
                 )
 
                 with gr.Row():
