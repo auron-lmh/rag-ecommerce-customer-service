@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     default_model: str = "deepseek-chat"
     fallback_model: str = "qwen-plus"
     vision_model: str = "qwen3.7-plus"  # 图片理解（替代已下线 glm-4v-flash）
-    ocr_model: str = "qwen3.7-plus"  # PDF OCR（替代已下线 qwen-vl-max）
+    ocr_model: str = "qwen-vl-ocr-1028"  # PDF OCR（替代已下线 qwen-vl-max）
 
     # ========== 文档解析 ==========
     pdf_max_pages: int = 50  # PDF单次最大解析页数

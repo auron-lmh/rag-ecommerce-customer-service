@@ -304,6 +304,7 @@ class Embedder:
                     model=self.model_name,
                     input=inputs,
                     api_key=self._api_key,
+                    dimension=self._dimension,
                 )
             except Exception as e:
                 logger.error("DashScope API 异常 (attempt %d): %s", attempt + 1, e)
