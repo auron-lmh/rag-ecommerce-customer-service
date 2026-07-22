@@ -1,11 +1,7 @@
 """模块7-11: 工程化模块 — 缓存/监控/日志/错误处理/安全防护
 
 使用:
-    from src.engineering import get_cache, get_monitor, get_logger, get_error_handler
-    cache = get_cache()
-    monitor = get_monitor()
-    logger = get_logger()
-    handler = get_error_handler()
+    from src.engineering import get_cache, get_monitor, get_logger, get_error_handler, get_security
 """
 
 from .cache import CacheManager, MemoryCache, RedisCache, get_cache
@@ -21,6 +17,7 @@ from .error_handler import (
 )
 from .logger import StructuredLogger, get_logger
 from .monitor import QueryMonitor, QueryRecord, estimate_cost, get_monitor
+from .security import SecurityManager, check_output, get_security, sanitize_input
 
 __all__ = [
     "CacheManager",
@@ -41,4 +38,8 @@ __all__ = [
     "get_error_handler",
     "retry_on_error",
     "safe_execute",
+    "SecurityManager",
+    "get_security",
+    "sanitize_input",
+    "check_output",
 ]
