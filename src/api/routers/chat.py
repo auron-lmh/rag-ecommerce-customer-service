@@ -1,6 +1,6 @@
 """模块12 对话路由 — POST /api/chat
 
-意图路由 + RAG 检索 + 生成回复（预留 LLM 生成）
+意图路由 + 多级降级检索 + 生成回复（预留 LLM 生成）
 """
 
 import logging
@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 
 from src.api.deps import get_retriever
 from src.api.models import ChatRequest, ChatResponse, SearchResultItem
+from src.embedding.degradation import get_degradation_strategy
 from src.embedding.retriever import Retriever
 from src.routing import RouteTarget, get_router
 
@@ -22,13 +23,13 @@ async def chat(
     req: ChatRequest,
     retriever: Retriever = Depends(get_retriever),
 ) -> ChatResponse:
-    """智能客服对话 — 意图路由 + 检索 + 回复
+    """智能客服对话 — 意图路由 + 多级降级检索 + 回复
 
     流程:
       1. 意图分类 (LLM Function Calling)
       2. 路由决策 (RAG / SQL / 直接回复 / 转人工)
       3. 查询改写 (RAG 路由时)
-      4. 语义检索 (RAG 路由时)
+      4. 多级降级检索 (Level 1→2→3→4)
       5. 生成回复 (预留)
     """
     router_instance = get_router()
@@ -45,13 +46,15 @@ async def chat(
         reply="",
     )
 
-    # ── RAG 路由: 检索 ──
+    # ── RAG 路由: 多级降级检索 ──
     if route_result.target in (RouteTarget.RAG, RouteTarget.HYBRID):
-        search_response = retriever.search(
+        strategy = get_degradation_strategy(retriever)
+        degradation_result = strategy.search_with_degradation(
             query=route_result.rewritten_query,
             top_k=req.top_k,
             use_rerank=req.use_reranker,
         )
+
         response.results = [
             SearchResultItem(
                 chunk_id=r.chunk_id,
@@ -61,15 +64,22 @@ async def chat(
                 source_file=r.source_file,
                 heading_path=r.heading_path,
             )
-            for r in search_response.results
+            for r in degradation_result.response.results
         ]
-        response.search_time_ms = search_response.elapsed_ms
+        response.search_time_ms = degradation_result.response.elapsed_ms
+        response.degradation_level = degradation_result.level
+        response.degradation_method = degradation_result.method
 
         # TODO: 调用 LLM 生成最终回复
         # 暂时返回检索结果的拼接
         if response.results:
             context = "\n".join(r.text[:200] for r in response.results[:3])
             response.reply = f"[RAG 检索到 {len(response.results)} 条结果]\n\n{context}"
+        elif degradation_result.level == 4:
+            response.reply = (
+                "抱歉，我目前的知识库中没有找到关于该问题的信息。"
+                "建议您通过以下方式获取帮助：联系人工客服。"
+            )
         else:
             response.reply = "抱歉，没有找到相关信息。"
 

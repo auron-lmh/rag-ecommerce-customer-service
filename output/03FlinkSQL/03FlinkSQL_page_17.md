@@ -1,0 +1,29 @@
+## 第17页
+
+MySQL type
+
+Oracle type
+
+PostgreSQL type
+
+Flink SQL type
+
+TINYINT
+
+SMALLINT
+
+TINYINT
+
+UNSIGNED
+
+INT
+
+MEDIUMINT
+
+SMALLINT
+
+UNSIGNED
+
+BIGINT
+
+INT
