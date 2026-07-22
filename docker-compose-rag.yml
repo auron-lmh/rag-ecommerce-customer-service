@@ -2,10 +2,12 @@
 # 使用方法:
 #   1. 将此文件复制到 VM 的 /root/rag-system/
 #   2. 执行: docker compose -f docker-compose-rag.yml up -d
-#   3. 访问: http://VM_IP:8000/docs (API)
-#   4. 访问: http://VM_IP:7860 (Gradio 管理后台)
+#   3. 访问: http://VM_IP:8000/docs (API 文档)
+#   4. 访问: http://VM_IP:7860 (知识库入库平台)
+#   5. 访问: http://VM_IP:7861 (用户聊天界面)
+#   6. 访问: http://VM_IP:7862 (管理员控制台)
 #
-# 注意: Milvus 已在另一个 docker-compose.yml 中运行，此处只启动 Redis + API + Gradio
+# 注意: Milvus 已在另一个 docker-compose.yml 中运行
 
 services:
   # ── Redis 缓存 ──
@@ -57,7 +59,7 @@ services:
     networks:
       - milvus
 
-  # ── Gradio 管理后台 ──
+  # ── 知识库入库平台 ──
   gradio:
     container_name: rag-gradio
     build:
@@ -85,6 +87,76 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:7860"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - milvus
+
+  # ── 用户聊天界面 ──
+  chat-ui:
+    container_name: rag-chat-ui
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.admin.chat_ui"]
+    ports:
+      - "7861:7861"
+    environment:
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BAILIAN_API_KEY=${BAILIAN_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - VISION_MODEL=${VISION_MODEL:-glm-4v-flash}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7861"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - milvus
+
+  # ── 管理员控制台 ──
+  admin-ui:
+    container_name: rag-admin-ui
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.admin.admin_ui"]
+    ports:
+      - "7862:7862"
+    environment:
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BAILIAN_API_KEY=${BAILIAN_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - VISION_MODEL=${VISION_MODEL:-glm-4v-flash}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7862"]
       interval: 30s
       timeout: 10s
       retries: 3

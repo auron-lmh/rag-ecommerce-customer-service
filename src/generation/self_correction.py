@@ -178,8 +178,21 @@ class SelfCorrector:
         )
 
     def _generate(self, query: str, docs: list[str]) -> str:
-        """调用 LLM 生成回答"""
+        """调用 LLM 生成回答（带缓存）"""
         context = "\n\n".join(f"[文档{i+1}] {d[:800]}" for i, d in enumerate(docs[:5]))
+        prompt = GENERATION_PROMPT.format(context=context, query=query)
+
+        # 检查 LLM 缓存
+        try:
+            from src.engineering import get_cache
+
+            cache = get_cache()
+            cached = cache.get_llm_response(prompt)
+            if cached:
+                logger.debug("LLM 缓存命中: %s", query[:50])
+                return cached
+        except Exception:
+            pass
 
         try:
             resp = requests.post(
@@ -190,22 +203,22 @@ class SelfCorrector:
                 },
                 json={
                     "model": settings.default_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": GENERATION_PROMPT.format(
-                                context=context,
-                                query=query,
-                            ),
-                        }
-                    ],
+                    "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
                     "max_tokens": 1024,
                 },
                 timeout=30,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+
+            # 存入缓存
+            try:
+                cache.set_llm_response(prompt, result, ttl=3600)
+            except Exception:
+                pass
+
+            return result
         except Exception as e:
             logger.error("生成失败: %s", e)
             return "抱歉，生成回答时出现错误，请稍后重试。"
