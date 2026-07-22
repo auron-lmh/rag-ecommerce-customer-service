@@ -26,7 +26,7 @@ def chat_with_bot(message: str, history: list) -> tuple:
 
     Args:
         message: 用户输入
-        history: 对话历史 [(user, assistant), ...]
+        history: 对话历史 (Gradio 6.0 格式)
 
     Returns:
         (更新后的历史, 状态信息)
@@ -73,14 +73,16 @@ def chat_with_bot(message: str, history: list) -> tuple:
 
         status = " | ".join(status_parts) if status_parts else "正常回复"
 
-        # 更新历史
-        history.append((message, reply))
+        # Gradio 6.0 格式: [{"role": "user", "content": ...}, {"role": "assistant", "content": ...}]
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": reply})
 
         return history, status
 
     except Exception as e:
         logger.error("聊天请求失败: %s", e)
-        history.append((message, f"系统错误: {str(e)}"))
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": f"系统错误: {str(e)}"})
         return history, f"错误: {str(e)}"
 
 
@@ -111,6 +113,7 @@ def create_chat_ui() -> gr.Blocks:
                     label="对话",
                     height=400,
                     show_label=False,
+                    type="messages",
                 )
 
                 with gr.Row():
@@ -183,9 +186,16 @@ def create_chat_ui() -> gr.Blocks:
 
         def retry_last(history):
             if history:
-                last_message = history[-1][0]
-                history = history[:-1]
-                return chat_with_bot(last_message, history)
+                # 获取最后一条用户消息
+                last_message = None
+                for msg in reversed(history):
+                    if msg.get("role") == "user":
+                        last_message = msg.get("content")
+                        break
+                if last_message:
+                    # 移除最后一轮对话
+                    history = history[:-2]
+                    return chat_with_bot(last_message, history)
             return history, "没有可重试的消息"
 
         retry_btn.click(
