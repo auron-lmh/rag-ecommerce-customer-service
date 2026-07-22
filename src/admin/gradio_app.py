@@ -402,7 +402,7 @@ class ProcessorApp:
 
 def main():
     app = ProcessorApp()
-    app.create_interface().launch()
+    app.create_interface().launch(server_name="0.0.0.0", server_port=7860)
 
 
 if __name__ == "__main__":
