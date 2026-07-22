@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+.eggs
+*.egg-info
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# 环境文件
+.env
+.env.local
+
+# 数据和日志（挂载卷）
+data/
+logs/
+output/
+
+# 文档
+*.md
+docs/
+
+# 测试
+tests/
+pytest.ini
+
+# 其他
+Dockerfile
+docker-compose*.yml
+.dockerignore

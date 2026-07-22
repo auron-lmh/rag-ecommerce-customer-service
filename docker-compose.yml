@@ -1,0 +1,65 @@
+# 电商智能客服 RAG 系统 - Docker Compose
+# 使用方法:
+#   1. 将此文件复制到 VM 的 /root/ 目录
+#   2. 执行: docker compose -f docker-compose-rag.yml up -d
+#   3. 访问: http://VM_IP:8000/docs
+
+version: '3.5'
+
+services:
+  # ── Redis 缓存 ──
+  redis:
+    container_name: rag-redis
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - milvus
+
+  # ── FastAPI 应用 ──
+  api:
+    container_name: rag-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MILVUS_HOST=milvus-standalone
+      - MILVUS_PORT=19530
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - BAILIAN_API_KEY=${BAILIAN_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      milvus-standalone:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - milvus
+
+volumes:
+  redis_data:
+
+networks:
+  milvus:
+    external: true
