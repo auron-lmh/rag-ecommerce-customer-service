@@ -5,11 +5,15 @@
 - 多轮对话
 - 显示意图分类和人工介入状态
 - 显示检索来源
+- 自动保存人工介入请求到数据库
 
 启动: python -m src.admin.chat_ui
 """
 
+import json
 import logging
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
@@ -19,6 +23,68 @@ logger = logging.getLogger(__name__)
 
 # API 地址 (Docker 容器内使用服务名)
 API_BASE_URL = "http://rag-api:8000"
+
+# 人工介入数据库
+HITL_DB = Path(__file__).parent.parent.parent / "data" / "hitl_requests.db"
+
+
+def init_hitl_db():
+    """初始化人工介入数据库"""
+    HITL_DB.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(HITL_DB) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS hitl_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT DEFAULT '',
+                user_query TEXT NOT NULL,
+                intent TEXT DEFAULT '',
+                confidence REAL DEFAULT 0,
+                human_reason TEXT DEFAULT '',
+                priority TEXT DEFAULT 'low',
+                status TEXT DEFAULT 'pending',
+                assigned_to TEXT DEFAULT '',
+                resolution TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                resolved_at TEXT DEFAULT '',
+                metadata TEXT DEFAULT '{}'
+            )
+        """)
+        conn.commit()
+
+
+def save_hitl_request(
+    session_id: str,
+    user_query: str,
+    intent: str,
+    confidence: float,
+    human_reason: str,
+    priority: str,
+):
+    """保存人工介入请求到数据库"""
+    try:
+        with sqlite3.connect(HITL_DB) as conn:
+            conn.execute(
+                """INSERT INTO hitl_requests
+                   (session_id, user_query, intent, confidence, human_reason, priority, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    user_query,
+                    intent,
+                    confidence,
+                    human_reason,
+                    priority,
+                    datetime.now().isoformat(),
+                ),
+            )
+            conn.commit()
+            logger.info("人工介入请求已保存: %s", user_query[:50])
+    except Exception as e:
+        logger.error("保存人工介入请求失败: %s", e)
+
+
+# 初始化数据库
+init_hitl_db()
 
 
 def chat_with_bot(message: str, history: list) -> tuple:
@@ -72,6 +138,18 @@ def chat_with_bot(message: str, history: list) -> tuple:
                 status_parts.append(f"来源: {', '.join(sources)}")
 
         status = " | ".join(status_parts) if status_parts else "正常回复"
+
+        # 如果需要人工介入，保存到数据库
+        if needs_human:
+            save_hitl_request(
+                session_id=f"chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                user_query=message,
+                intent=intent,
+                confidence=confidence,
+                human_reason=human_reason,
+                priority=data.get("human_priority", "medium"),
+            )
+            status += "\n✅ 已通知管理员"
 
         # Gradio 6.0 格式: [{"role": "user", "content": ...}, {"role": "assistant", "content": ...}]
         history.append({"role": "user", "content": message})
