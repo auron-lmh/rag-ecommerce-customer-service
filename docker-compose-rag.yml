@@ -41,6 +41,7 @@ services:
       - BAILIAN_API_KEY=${BAILIAN_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - VISION_MODEL=${VISION_MODEL:-glm-4v-flash}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -73,6 +74,7 @@ services:
       - BAILIAN_API_KEY=${BAILIAN_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - ZHIPU_API_KEY=${ZHIPU_API_KEY}
+      - VISION_MODEL=${VISION_MODEL:-glm-4v-flash}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
