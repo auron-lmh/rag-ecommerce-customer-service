@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # ========== 智谱 GLM ==========
     zhipu_api_key: str = ""
     zhipu_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    zhipu_web_search_enabled: bool = True  # 是否启用智谱联网搜索
 
     # ========== DeepSeek ==========
     deepseek_api_key: str = ""
@@ -87,7 +88,9 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
 
-    # ========== 检索参数 ==========
+    # ========== 联网搜索 ==========
+    tavily_api_key: str = ""  # Tavily Search API Key (可选)
+    web_search_enabled: bool = True  # 是否启用联网搜索降级
     retrieval_top_k: int = 5
     retrieval_dense_top_k: int = 20
     retrieval_sparse_top_k: int = 20

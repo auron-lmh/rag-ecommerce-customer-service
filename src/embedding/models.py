@@ -42,6 +42,7 @@ class SearchResult:
     score: float  # 余弦相似度或 L2 距离
     doc_type: str = ""
     source_file: str = ""
+    page_number: int = 0  # 页码（0表示未知）
     heading_path: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
 

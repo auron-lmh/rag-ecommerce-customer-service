@@ -230,18 +230,103 @@ class DegradationStrategy:
     def _web_search(self, query: str) -> list[dict]:
         """联网搜索兜底
 
-        使用 Tavily Search API（如果配置了），否则返回空列表。
+        优先使用智谱联网搜索，其次使用 Tavily Search API。
         """
-        tavily_key = getattr(settings, "tavily_api_key", "")
-        if not tavily_key:
-            logger.debug("未配置 Tavily API Key，跳过联网搜索")
+        # 检查是否启用联网搜索
+        if not getattr(settings, "web_search_enabled", True):
             return []
 
+        # 优先尝试智谱联网搜索
+        if settings.zhipu_api_key and getattr(
+            settings, "zhipu_web_search_enabled", True
+        ):
+            results = self._zhipu_web_search(query)
+            if results:
+                return results
+
+        # 备选：Tavily Search API
+        tavily_key = getattr(settings, "tavily_api_key", "")
+        if tavily_key:
+            return self._tavily_web_search(query, tavily_key)
+
+        logger.debug("未配置联网搜索 API Key（智谱/Tavily），跳过联网搜索")
+        return []
+
+    def _zhipu_web_search(self, query: str) -> list[dict]:
+        """智谱联网搜索
+
+        使用智谱 GLM-4-Flash + 联网搜索插件
+        """
+        try:
+            resp = requests.post(
+                f"{settings.zhipu_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.zhipu_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "glm-4-flash",
+                    "messages": [{"role": "user", "content": query}],
+                    "tools": [
+                        {
+                            "type": "web_search",
+                            "web_search": {
+                                "enable": True,
+                                "search_query": query,
+                            },
+                        }
+                    ],
+                },
+                timeout=20,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            # 提取搜索结果
+            results = []
+            choices = data.get("choices", [])
+            if choices:
+                message = choices[0].get("message", {})
+                # 检查是否有工具调用结果
+                tool_calls = message.get("tool_calls", [])
+                for tc in tool_calls:
+                    if tc.get("type") == "web_search":
+                        search_results = tc.get("web_search", {}).get("results", [])
+                        for r in search_results:
+                            results.append(
+                                {
+                                    "title": r.get("title", ""),
+                                    "url": r.get("url", ""),
+                                    "snippet": r.get("content", "")[:500],
+                                }
+                            )
+
+                # 如果没有工具调用结果，直接返回LLM的回答
+                if not results:
+                    content = message.get("content", "")
+                    if content:
+                        results.append(
+                            {
+                                "title": "智谱联网搜索结果",
+                                "url": "",
+                                "snippet": content[:500],
+                            }
+                        )
+
+            logger.info("智谱联网搜索: %s, 返回 %d 条结果", query[:50], len(results))
+            return results
+
+        except Exception as e:
+            logger.warning("智谱联网搜索失败: %s", e)
+            return []
+
+    def _tavily_web_search(self, query: str, api_key: str) -> list[dict]:
+        """Tavily Search API"""
         try:
             resp = requests.post(
                 "https://api.tavily.com/search",
                 json={
-                    "api_key": tavily_key,
+                    "api_key": api_key,
                     "query": query,
                     "search_depth": "basic",
                     "max_results": 5,
@@ -251,16 +336,17 @@ class DegradationStrategy:
             resp.raise_for_status()
             data = resp.json()
             results = data.get("results", [])
+            logger.info("Tavily 联网搜索: %s, 返回 %d 条结果", query[:50], len(results))
             return [
                 {
                     "title": r.get("title", ""),
                     "url": r.get("url", ""),
-                    "snippet": r.get("content", ""),
+                    "snippet": r.get("content", "")[:500],
                 }
                 for r in results
             ]
         except Exception as e:
-            logger.warning("联网搜索失败: %s", e)
+            logger.warning("Tavily 联网搜索失败: %s", e)
             return []
 
 

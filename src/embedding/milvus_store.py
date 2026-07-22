@@ -278,6 +278,7 @@ class MilvusStore:
                 if score < threshold:
                     continue
                 entity = hit.get("entity", {})
+                chunk_metadata = entity.get("chunk_metadata", {}) or {}
                 results.append(
                     SearchResult(
                         chunk_id=str(hit.get("id", "")),
@@ -285,6 +286,7 @@ class MilvusStore:
                         score=round(score, 4),
                         doc_type=entity.get("doc_type", ""),
                         source_file=entity.get("source_file", ""),
+                        page_number=chunk_metadata.get("page_number", 0),
                         heading_path=list(entity.get("heading_path", []) or []),
                     )
                 )

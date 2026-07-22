@@ -25,6 +25,7 @@ class SearchResultItem(BaseModel):
     score: float
     doc_type: str = ""
     source_file: str = ""
+    page_number: int = 0  # 页码（0表示未知）
     heading_path: list[str] = []
 
 

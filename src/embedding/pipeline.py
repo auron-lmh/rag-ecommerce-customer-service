@@ -88,6 +88,7 @@ class IndexingPipeline:
             {
                 "doc_type": chunk_result.doc_type.value,
                 "source_file": chunk_result.source_file,
+                "page_number": c.page_number,
                 "heading_path": c.heading_path,
                 "section_title": c.section_title,
                 "chunk_index": c.chunk_index,

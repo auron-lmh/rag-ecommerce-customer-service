@@ -29,6 +29,7 @@ class Chunk:
         total_chunks: 源文档总分块数
         source_file: 来源文件路径
         doc_type: 文档类型
+        page_number: 页码（PDF文档，从1开始）
         heading_path: 标题路径 ["父标题", "子标题"]
         section_title: 最近标题
         strategy: 使用的分块策略
@@ -46,6 +47,7 @@ class Chunk:
 
     source_file: str = ""
     doc_type: DocType | None = None
+    page_number: int = 0  # 页码（0表示未知）
 
     heading_path: list[str] = field(default_factory=list)
     section_title: Optional[str] = None
