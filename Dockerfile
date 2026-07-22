@@ -9,24 +9,23 @@ WORKDIR /app
 
 # 使用国内 PyPI 镜像源
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple/
+RUN pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Poetry
-RUN pip install poetry
-
-# 配置 Poetry 使用国内镜像
-RUN poetry source add tuna https://pypi.tuna.tsinghua.edu.cn/simple/ --priority default
+# 安装 Poetry 并配置镜像
+RUN pip install poetry \
+    && poetry config virtualenvs.create false \
+    && poetry config repositories.tuna https://pypi.tuna.tsinghua.edu.cn/simple/
 
 # 复制依赖文件
 COPY pyproject.toml poetry.lock ./
 
-# 安装依赖（不创建虚拟环境，直接安装到系统）
-RUN poetry config virtualenvs.create false \
-    && poetry install --only main --no-interaction
+# 安装依赖
+RUN poetry install --only main --no-interaction
 
 # 复制应用代码
 COPY src/ ./src/
