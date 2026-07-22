@@ -18,7 +18,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import chat, query, stats, stream, upload
+from src.api.routers import chat, evaluate, query, stats, stream, upload
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -56,6 +56,7 @@ def create_app() -> FastAPI:
     app.include_router(stats.router)
     app.include_router(chat.router)
     app.include_router(stream.router)
+    app.include_router(evaluate.router)
 
     # ── 根路由 ──
 

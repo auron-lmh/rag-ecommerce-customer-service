@@ -1,11 +1,12 @@
-"""模块6.5: 流式输出 + 多轮对话管理 — SSE / 滑动窗口 / 智能重检索
+"""模块6.5: 流式输出 + 多轮对话管理 — SSE / 滑动窗口 / 智能重检索 / 人工介入
 
 使用:
-    from src.conversation import get_session_manager, get_streaming_generator
+    from src.conversation import get_session_manager, get_streaming_generator, get_human_handler
     manager = get_session_manager()
     session = manager.create_session()
 """
 
+from .human_in_loop import HumanInLoopHandler, get_human_handler
 from .models import ConversationSession, Message, StreamEvent
 from .retrieval_judge import RetrievalJudge, get_retrieval_judge
 from .session_manager import SessionManager, get_session_manager
@@ -21,4 +22,6 @@ __all__ = [
     "get_streaming_generator",
     "RetrievalJudge",
     "get_retrieval_judge",
+    "HumanInLoopHandler",
+    "get_human_handler",
 ]

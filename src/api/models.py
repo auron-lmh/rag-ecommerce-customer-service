@@ -113,3 +113,6 @@ class ChatResponse(BaseModel):
     faithfulness: float = 0.0  # 忠实度分数 (0~1)
     correction_rounds: int = 0  # 自纠正轮数
     was_corrected: bool = False  # 是否经过纠正
+    needs_human: bool = False  # 是否需要人工介入
+    human_reason: str = ""  # 人工介入原因
+    human_priority: str = ""  # 人工介入优先级 (low/medium/high)
