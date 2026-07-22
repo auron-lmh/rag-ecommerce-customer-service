@@ -110,3 +110,6 @@ class ChatResponse(BaseModel):
     search_time_ms: float = 0
     degradation_level: int = 1  # 1=直接命中, 2=改写命中, 3=联网搜索, 4=兜底
     degradation_method: str = "hybrid"  # hybrid / rewritten / web_search / fallback
+    faithfulness: float = 0.0  # 忠实度分数 (0~1)
+    correction_rounds: int = 0  # 自纠正轮数
+    was_corrected: bool = False  # 是否经过纠正

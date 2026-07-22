@@ -1,6 +1,6 @@
 """模块12 对话路由 — POST /api/chat
 
-意图路由 + 多级降级检索 + 生成回复（预留 LLM 生成）
+意图路由 + 多级降级检索 + 幻觉检测自纠正生成
 """
 
 import logging
@@ -11,6 +11,7 @@ from src.api.deps import get_retriever
 from src.api.models import ChatRequest, ChatResponse, SearchResultItem
 from src.embedding.degradation import get_degradation_strategy
 from src.embedding.retriever import Retriever
+from src.generation import get_corrector
 from src.routing import RouteTarget, get_router
 
 logger = logging.getLogger(__name__)
@@ -23,14 +24,14 @@ async def chat(
     req: ChatRequest,
     retriever: Retriever = Depends(get_retriever),
 ) -> ChatResponse:
-    """智能客服对话 — 意图路由 + 多级降级检索 + 回复
+    """智能客服对话 — 意图路由 + 多级降级检索 + 幻觉检测自纠正
 
     流程:
       1. 意图分类 (LLM Function Calling)
       2. 路由决策 (RAG / SQL / 直接回复 / 转人工)
       3. 查询改写 (RAG 路由时)
       4. 多级降级检索 (Level 1→2→3→4)
-      5. 生成回复 (预留)
+      5. 幻觉检测 + 自纠正闭环 (最多2轮)
     """
     router_instance = get_router()
     route_result = router_instance.route(req.query)
@@ -46,8 +47,9 @@ async def chat(
         reply="",
     )
 
-    # ── RAG 路由: 多级降级检索 ──
+    # ── RAG 路由: 多级降级检索 + 幻觉检测自纠正 ──
     if route_result.target in (RouteTarget.RAG, RouteTarget.HYBRID):
+        # 多级降级检索
         strategy = get_degradation_strategy(retriever)
         degradation_result = strategy.search_with_degradation(
             query=route_result.rewritten_query,
@@ -70,11 +72,18 @@ async def chat(
         response.degradation_level = degradation_result.level
         response.degradation_method = degradation_result.method
 
-        # TODO: 调用 LLM 生成最终回复
-        # 暂时返回检索结果的拼接
+        # 幻觉检测自纠正生成
         if response.results:
-            context = "\n".join(r.text[:200] for r in response.results[:3])
-            response.reply = f"[RAG 检索到 {len(response.results)} 条结果]\n\n{context}"
+            corrector = get_corrector(retriever)
+            gen_result = corrector.generate_with_correction(
+                query=route_result.rewritten_query,
+                top_k=req.top_k,
+                use_rerank=req.use_reranker,
+            )
+            response.reply = gen_result.answer
+            response.faithfulness = gen_result.faithfulness
+            response.correction_rounds = gen_result.correction_rounds
+            response.was_corrected = gen_result.was_corrected
         elif degradation_result.level == 4:
             response.reply = (
                 "抱歉，我目前的知识库中没有找到关于该问题的信息。"
