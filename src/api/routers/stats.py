@@ -1,13 +1,15 @@
-"""模块12 统计路由 — GET /api/stats, GET /api/health, GET /api/cache/stats"""
+"""模块12 统计路由 — GET /api/stats, GET /api/health, GET /api/cache/stats, GET /api/stats/daily"""
 
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query
 
 from src.api.deps import get_retriever, get_store
 from src.api.models import HealthResponse, StatsResponse
 from src.config import settings
 from src.embedding.milvus_store import MilvusStore
 from src.embedding.retriever import Retriever
-from src.engineering import get_cache
+from src.engineering import get_cache, get_monitor
 
 router = APIRouter(prefix="/api", tags=["监控"])
 
@@ -62,3 +64,28 @@ async def clear_cache() -> dict:
     cache = get_cache()
     cache.clear()
     return {"status": "ok", "message": "缓存已清空"}
+
+
+@router.get("/stats/daily")
+async def daily_stats(
+    date: Optional[str] = Query(default=None, description="日期 YYYY-MM-DD")
+) -> dict:
+    """每日统计 — 查询量/成本/延迟/幻觉率/缓存命中率"""
+    monitor = get_monitor()
+    return monitor.get_daily_stats(date)
+
+
+@router.get("/stats/recent")
+async def recent_queries(limit: int = Query(default=20, ge=1, le=100)) -> list[dict]:
+    """最近查询记录"""
+    monitor = get_monitor()
+    return monitor.get_recent_queries(limit)
+
+
+@router.get("/stats/alerts")
+async def alerts(
+    date: Optional[str] = Query(default=None, description="日期 YYYY-MM-DD")
+) -> list[dict]:
+    """告警规则检查"""
+    monitor = get_monitor()
+    return monitor.check_alerts(date)
