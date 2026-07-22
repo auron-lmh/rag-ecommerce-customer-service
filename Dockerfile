@@ -7,7 +7,7 @@ FROM python:3.13-slim
 # 设置工作目录
 WORKDIR /app
 
-# 使用国内 PyPI 镜像源
+# 使用国内 PyPI 镜像源 (pip)
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple/
 RUN pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn
 
@@ -16,15 +16,18 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Poetry (指定版本，避免兼容性问题)
-RUN pip install "poetry>=2.0.0" \
+# 安装 Poetry (指定版本 2.0+)
+RUN pip install "poetry>=2.0.0,<3.0.0"
+
+# 配置 Poetry 使用清华源
+RUN poetry config repositories.tuna https://pypi.tuna.tsinghua.edu.cn/simple/ \
     && poetry config virtualenvs.create false
 
 # 复制依赖文件
 COPY pyproject.toml poetry.lock ./
 
-# 安装依赖
-RUN poetry install --only main --no-interaction
+# 安装依赖 (使用清华源)
+RUN poetry install --only main --no-interaction --source tuna
 
 # 复制应用代码
 COPY src/ ./src/
