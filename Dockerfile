@@ -3,7 +3,7 @@
 # 构建: docker build -t rag-api .
 # 运行: docker run -p 8000:8000 rag-api
 
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 # 设置工作目录
 WORKDIR /app
