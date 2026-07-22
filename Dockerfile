@@ -20,7 +20,7 @@ COPY pyproject.toml poetry.lock ./
 
 # 安装依赖（不创建虚拟环境，直接安装到系统）
 RUN poetry config virtualenvs.create false \
-    && poetry install --no-dev --no-interaction
+    && poetry install --only main --no-interaction
 
 # 复制应用代码
 COPY src/ ./src/
