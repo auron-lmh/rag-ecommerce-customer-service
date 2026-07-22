@@ -17,8 +17,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# API 地址
-API_BASE_URL = "http://localhost:8000"
+# API 地址 (Docker 容器内使用服务名)
+API_BASE_URL = "http://rag-api:8000"
 
 
 def chat_with_bot(message: str, history: list) -> tuple:
