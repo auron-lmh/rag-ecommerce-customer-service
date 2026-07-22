@@ -219,3 +219,16 @@ class Retriever:
                 except Exception as e:
                     result["search_test"] = f"failed: {e}"
         return result
+
+
+# ── 模块级单例 ──
+
+_retriever_instance: Optional[Retriever] = None
+
+
+def get_retriever() -> Retriever:
+    """获取 Retriever 单例"""
+    global _retriever_instance
+    if _retriever_instance is None:
+        _retriever_instance = Retriever()
+    return _retriever_instance
