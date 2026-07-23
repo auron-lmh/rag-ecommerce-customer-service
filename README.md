@@ -196,7 +196,11 @@ Level 5: 诚实兜底
 - Python 3.12+
 - Docker & Docker Compose
 - 8GB+ RAM
-- API Key：[阿里云百炼](https://bailian.console.aliyun.com/) + [DeepSeek](https://platform.deepseek.com/)
+- API Key：
+  - [阿里云百炼](https://bailian.console.aliyun.com/) — Embedding / Reranker / OCR
+  - [DeepSeek](https://platform.deepseek.com/) — 主 LLM 对话
+  - [智谱 AI](https://open.bigmodel.cn/) — 联网搜索 / 图片理解
+  - [Tavily](https://tavily.com/) — 联网搜索备选（可选）
 
 ### 1. 克隆 & 配置
 
