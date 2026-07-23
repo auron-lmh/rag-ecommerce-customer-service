@@ -265,16 +265,20 @@ src/
 DEFAULT_MODEL=deepseek-chat
 FALLBACK_MODEL=qwen-plus
 
-# Embedding
+# Embedding + Reranker (阿里云百炼)
 EMBEDDING_MODEL=qwen3-vl-embedding
 EMBEDDING_DIM=2048
-
-# Reranker
 RERANKER_MODEL=qwen3-vl-rerank
+BAILIAN_API_KEY=sk-xxxxxxxx
 
 # OCR (4 模型自动切换)
 OCR_MODEL=qwen-vl-ocr-2025-04-13
 OCR_MODEL_FALLBACK=qwen-vl-ocr-2025-08-28,qwen-vl-ocr-2025-11-20,qwen3.5-ocr
+
+# 联网搜索（智谱 / Tavily）
+ZHIPU_API_KEY=xxxxxxxx
+ZHIPU_WEB_SEARCH_ENABLED=true
+TAVILY_API_KEY=xxxxxxxx      # 可选，备选搜索引擎
 
 # 检索
 RETRIEVAL_TOP_K=5
