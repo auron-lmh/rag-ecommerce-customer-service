@@ -201,7 +201,7 @@ Level 5: 诚实兜底
 ### 1. 克隆 & 配置
 
 ```bash
-git clone https://github.com/<xiaoming>/rag-ecommerce-customer-service.git
+git clone https://github.com/minghuangliang197/rag-ecommerce-customer-service.git
 cd rag-ecommerce-customer-service
 cp .env.example .env
 # 编辑 .env 填入 API Key
