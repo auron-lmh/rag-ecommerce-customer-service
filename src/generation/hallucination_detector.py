@@ -1,15 +1,13 @@
 """模块6 幻觉检测器 — G-Eval 风格 LLM 自检
 
 使用 LLM 检查生成的回答是否有事实依据。
+使用统一 LLMClient 替代原始 requests 调用。
 """
 
-import json
 import logging
 from typing import Optional
 
-import requests
-
-from src.config import settings
+from src.engineering.llm_client import get_llm_client
 
 from .models import Claim, ClaimVerdict, HallucinationCheck
 
@@ -52,12 +50,13 @@ class HallucinationDetector:
     def __init__(
         self,
         model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
     ):
-        self.model = model or settings.default_model
-        self._api_key = api_key or settings.deepseek_api_key
-        self._base_url = base_url or settings.deepseek_base_url
+        if model:
+            from src.engineering.llm_client import LLMClient
+
+            self._client = LLMClient(model=model)
+        else:
+            self._client = get_llm_client()
 
     def check(self, answer: str, docs: list[str]) -> HallucinationCheck:
         """检查回答是否有幻觉
@@ -83,43 +82,25 @@ class HallucinationDetector:
             return self._fallback_check(answer, docs)
 
     def _call_llm(self, answer: str, docs: list[str]) -> HallucinationCheck:
-        """调用 LLM 进行幻觉检测"""
+        """调用 LLM 进行幻觉检测（使用统一 LLMClient）"""
         docs_text = "\n\n".join(
             f"[文档{i+1}] {d[:1000]}" for i, d in enumerate(docs[:5])
         )
 
-        resp = requests.post(
-            f"{self._base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": DETECTION_PROMPT.format(
-                            retrieved_docs=docs_text,
-                            answer=answer,
-                        ),
-                    }
-                ],
-                "temperature": 0.1,
-                "max_tokens": 2048,
-            },
+        data = self._client.chat_json(
+            messages=[
+                {
+                    "role": "user",
+                    "content": DETECTION_PROMPT.format(
+                        retrieved_docs=docs_text,
+                        answer=answer,
+                    ),
+                }
+            ],
+            temperature=0.1,
+            max_tokens=2048,
             timeout=30,
         )
-        resp.raise_for_status()
-
-        content = resp.json()["choices"][0]["message"]["content"].strip()
-        # 提取 JSON（可能被 markdown 包裹）
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
-
-        data = json.loads(content)
         return self._parse_result(data)
 
     def _parse_result(self, data: dict) -> HallucinationCheck:
@@ -178,11 +159,10 @@ class HallucinationDetector:
 
 # ── 模块级单例 ──
 
-_detector_instance: Optional[HallucinationDetector] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_detector() -> HallucinationDetector:
-    global _detector_instance
-    if _detector_instance is None:
-        _detector_instance = HallucinationDetector()
-    return _detector_instance
+    """获取 HallucinationDetector 单例"""
+    return HallucinationDetector()

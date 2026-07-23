@@ -168,11 +168,9 @@ class HumanInLoopHandler:
 
 # ── 模块级单例 ──
 
-_handler_instance: Optional[HumanInLoopHandler] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_human_handler() -> HumanInLoopHandler:
-    global _handler_instance
-    if _handler_instance is None:
-        _handler_instance = HumanInLoopHandler()
-    return _handler_instance
+    return HumanInLoopHandler()

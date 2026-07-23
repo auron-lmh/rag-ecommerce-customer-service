@@ -38,6 +38,8 @@ services:
     environment:
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
+      - MILVUS_USER=${MILVUS_USER:-root}
+      - MILVUS_PASSWORD=${MILVUS_PASSWORD:-Milvus}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - BAILIAN_API_KEY=${BAILIAN_API_KEY}
@@ -71,6 +73,8 @@ services:
     environment:
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
+      - MILVUS_USER=${MILVUS_USER:-root}
+      - MILVUS_PASSWORD=${MILVUS_PASSWORD:-Milvus}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - BAILIAN_API_KEY=${BAILIAN_API_KEY}
@@ -106,6 +110,8 @@ services:
     environment:
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
+      - MILVUS_USER=${MILVUS_USER:-root}
+      - MILVUS_PASSWORD=${MILVUS_PASSWORD:-Milvus}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - BAILIAN_API_KEY=${BAILIAN_API_KEY}
@@ -141,6 +147,8 @@ services:
     environment:
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
+      - MILVUS_USER=${MILVUS_USER:-root}
+      - MILVUS_PASSWORD=${MILVUS_PASSWORD:-Milvus}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - BAILIAN_API_KEY=${BAILIAN_API_KEY}

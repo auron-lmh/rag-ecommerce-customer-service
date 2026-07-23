@@ -10,9 +10,7 @@ import json
 import logging
 from typing import Optional
 
-import requests
-
-from src.config import settings
+from src.engineering.llm_client import LLMClient, LLMClientError, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -43,13 +41,17 @@ class RetrievalJudge:
 
     def __init__(
         self,
+        client: Optional[LLMClient] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
     ):
-        self.model = model or settings.default_model
-        self._api_key = api_key or settings.deepseek_api_key
-        self._base_url = base_url or settings.deepseek_base_url
+        if client is not None:
+            self._client = client
+        elif model or api_key or base_url:
+            self._client = LLMClient(model=model, api_key=api_key, base_url=base_url)
+        else:
+            self._client = get_llm_client()
 
     def should_retrieve(self, query: str, history: list[dict]) -> tuple[bool, str]:
         """判断是否需要重新检索
@@ -66,7 +68,7 @@ class RetrievalJudge:
 
         try:
             return self._call_llm(query, history)
-        except Exception as e:
+        except LLMClientError as e:
             logger.warning("重检索判断失败，默认需要检索: %s", e)
             return True, "判断失败，默认检索"
 
@@ -76,48 +78,36 @@ class RetrievalJudge:
         recent = history[-6:]
         history_text = "\n".join(f"{m['role']}: {m['content'][:200]}" for m in recent)
 
-        resp = requests.post(
-            f"{self._base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": JUDGE_PROMPT.format(
-                            history=history_text,
-                            query=query,
-                        ),
-                    }
-                ],
-                "temperature": 0.1,
-                "max_tokens": 200,
-            },
+        content = self._client.chat(
+            messages=[
+                {
+                    "role": "user",
+                    "content": JUDGE_PROMPT.format(
+                        history=history_text,
+                        query=query,
+                    ),
+                }
+            ],
+            temperature=0.1,
+            max_tokens=200,
             timeout=10,
         )
-        resp.raise_for_status()
 
-        content = resp.json()["choices"][0]["message"]["content"].strip()
         # 提取 JSON
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0]
         elif "```" in content:
             content = content.split("```")[1].split("```")[0]
 
-        data = json.loads(content)
+        data = json.loads(content.strip())
         return bool(data.get("need_retrieval", True)), data.get("reason", "")
 
 
 # ── 模块级单例 ──
 
-_judge_instance: Optional[RetrievalJudge] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_retrieval_judge() -> RetrievalJudge:
-    global _judge_instance
-    if _judge_instance is None:
-        _judge_instance = RetrievalJudge()
-    return _judge_instance
+    return RetrievalJudge()

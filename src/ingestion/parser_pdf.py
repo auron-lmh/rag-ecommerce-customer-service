@@ -318,42 +318,79 @@ def _inference_with_qwen(image: Image.Image, api_key: str) -> str:
 
     使用 layout_parser.LAYOUT_PROMPT (与 RAG 项目 prompt_layout_all_en 等价)
     参数: temperature=0.1, top_p=0.1 (与 RAG 项目一致, 保证确定性输出)
+
+    模型自动切换: 主模型失败时，自动尝试备选模型
     """
     base64_img = _image_to_base64(image)
 
-    try:
-        resp = requests.post(
-            f"{settings.bailian_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": settings.ocr_model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_img}"
-                                },
-                            },
-                            {"type": "text", "text": LAYOUT_PROMPT},
-                        ],
-                    }
-                ],
-                "temperature": 0.1,
-                "top_p": 0.1,
-                "max_tokens": 4096,
-            },
-            timeout=120,
+    # 构建模型列表: 主模型 + 备选模型
+    models_to_try = [settings.ocr_model]
+    if settings.ocr_model_fallback:
+        models_to_try.extend(
+            [m.strip() for m in settings.ocr_model_fallback.split(",") if m.strip()]
         )
-        if not resp.ok:
-            _log.error("千问 API (%d): %s", resp.status_code, resp.text[:300])
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"  [错误] API 调用失败: {e}")
-        return f"[OCR 失败: {e}]"
+
+    last_error = None
+
+    for model_name in models_to_try:
+        try:
+            resp = requests.post(
+                f"{settings.bailian_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model_name,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_img}"
+                                    },
+                                },
+                                {"type": "text", "text": LAYOUT_PROMPT},
+                            ],
+                        }
+                    ],
+                    "temperature": 0.1,
+                    "top_p": 0.1,
+                    "max_tokens": 4096,
+                },
+                timeout=120,
+            )
+
+            if resp.ok:
+                # 成功，记录使用的模型（仅在切换时打印）
+                if model_name != settings.ocr_model:
+                    print(f"  [切换] 使用备选模型: {model_name}")
+                return resp.json()["choices"][0]["message"]["content"].strip()
+
+            # 失败，记录错误
+            error_msg = resp.text[:200]
+            _log.warning(
+                "千问 API (%s, %d): %s", model_name, resp.status_code, error_msg
+            )
+
+            # 如果是 403/429（额度耗尽/限流），尝试下一个模型
+            if resp.status_code in (403, 429):
+                last_error = f"{model_name}: {resp.status_code}"
+                print(
+                    f"  [切换] {model_name} 不可用 (HTTP {resp.status_code})，尝试下一个模型..."
+                )
+                continue
+
+            # 其他错误，不重试
+            resp.raise_for_status()
+
+        except Exception as e:
+            last_error = f"{model_name}: {e}"
+            _log.warning("千问 API (%s) 异常: %s", model_name, e)
+            continue
+
+    # 所有模型都失败
+    print(f"  [错误] 所有 OCR 模型均失败，最后错误: {last_error}")
+    return f"[OCR 失败: 所有模型均不可用 ({last_error})]"

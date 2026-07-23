@@ -244,11 +244,9 @@ class SecurityManager:
 
 # ── 模块级单例 ──
 
-_security_instance: Optional[SecurityManager] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_security() -> SecurityManager:
-    global _security_instance
-    if _security_instance is None:
-        _security_instance = SecurityManager()
-    return _security_instance
+    return SecurityManager()

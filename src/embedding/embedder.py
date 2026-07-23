@@ -43,28 +43,30 @@ MAX_IMAGES_PER_CALL = 5  # 单次 API 最多 5 张图片
 
 
 class _RateLimiter:
-    """固定窗口速率限制器"""
+    """固定窗口速率限制器（线程安全）"""
 
     def __init__(self, limit: int = RPM_LIMIT, window_seconds: int = WINDOW_SECONDS):
         self.limit = limit
         self.window_seconds = window_seconds
         self.window_start = time.monotonic()
         self.count = 0
+        self._lock = __import__("threading").Lock()  # 线程安全锁
 
     def acquire(self):
-        now = time.monotonic()
-        elapsed = now - self.window_start
-        if elapsed >= self.window_seconds:
-            self.window_start = now
-            self.count = 0
-        if self.count >= self.limit:
-            sleep_sec = self.window_seconds - elapsed
-            if sleep_sec > 0:
-                logger.debug("速率限制: 等待 %.2fs", sleep_sec)
-                time.sleep(sleep_sec)
-            self.window_start = time.monotonic()
-            self.count = 0
-        self.count += 1
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self.window_start
+            if elapsed >= self.window_seconds:
+                self.window_start = now
+                self.count = 0
+            if self.count >= self.limit:
+                sleep_sec = self.window_seconds - elapsed
+                if sleep_sec > 0:
+                    logger.debug("速率限制: 等待 %.2fs", sleep_sec)
+                    time.sleep(sleep_sec)
+                self.window_start = time.monotonic()
+                self.count = 0
+            self.count += 1
 
 
 # ═══════════════════════════════════════
@@ -140,6 +142,7 @@ class Embedder:
         logger.info("开始向量化 %d 条文本 (API, batch_size=%d)", n, self.batch_size)
 
         all_vectors: list[list[float]] = []
+        failed_indices: set[int] = set()  # 记录失败的批次索引
         total_batches = (n + self.batch_size - 1) // self.batch_size
 
         for batch_idx in range(0, n, self.batch_size):
@@ -160,15 +163,22 @@ class Embedder:
             except Exception as e:
                 logger.error("批次 %d 向量化失败: %s", batch_num, e)
                 errors.append(f"batch[{batch_idx}:{batch_idx + len(batch_texts)}]: {e}")
-                # 失败批次填充零向量
+                # 关键修复: 记录失败索引，不填充零向量（避免污染检索）
+                for j in range(len(batch_texts)):
+                    failed_indices.add(batch_idx + j)
+                # 填充占位向量（后续会被过滤）
                 all_vectors.extend([[0.0] * self.dimension for _ in batch_texts])
 
         if show_progress:
             print()  # 换行
 
-        # 组装结果
+        # 组装结果（过滤失败的向量）
         embeddings: list[EmbeddingResult] = []
+        skipped_count = 0
         for i in range(n):
+            if i in failed_indices:
+                skipped_count += 1
+                continue  # 跳过失败的向量，不写入 Milvus
             embeddings.append(
                 EmbeddingResult(
                     chunk_id=chunk_ids[i],
@@ -181,6 +191,9 @@ class Embedder:
                     metadata=metadata_list[i] if i < len(metadata_list) else {},
                 )
             )
+
+        if skipped_count > 0:
+            logger.warning("跳过 %d 个失败的向量（避免零向量污染检索）", skipped_count)
 
         elapsed = time.time() - t0
         logger.info(
@@ -368,11 +381,9 @@ class Embedder:
 # 模块级单例
 # ═══════════════════════════════════════
 
-_embedder_instance: Optional[Embedder] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_embedder() -> Embedder:
-    global _embedder_instance
-    if _embedder_instance is None:
-        _embedder_instance = Embedder()
-    return _embedder_instance
+    return Embedder()

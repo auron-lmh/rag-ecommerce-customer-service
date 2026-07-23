@@ -15,9 +15,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
-import requests
-
 from src.config import settings
+from src.engineering.llm_client import get_llm_client
 
 from .models import SearchResponse, SearchResult
 
@@ -212,30 +211,20 @@ class DegradationStrategy:
     def _rewrite_query(self, query: str, attempt: int) -> str:
         """LLM 改写查询"""
         try:
-            from src.config import settings
-
             # 不同尝试使用不同的改写策略
             if attempt == 0:
                 prompt = f"将以下电商客服问题改写为更适合向量检索的简洁查询，去掉语气词，保留核心关键词：\n\n{query}"
             else:
                 prompt = f"将以下电商客服问题换一种表达方式，补充隐含的电商上下文：\n\n{query}"
 
-            resp = requests.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.default_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 100,
-                },
+            client = get_llm_client()
+            rewritten = client.chat_with_fallback(
+                messages=[{"role": "user", "content": prompt}],
+                fallback_value=query,
+                temperature=0.3,
+                max_tokens=100,
                 timeout=10,
             )
-            resp.raise_for_status()
-            rewritten = resp.json()["choices"][0]["message"]["content"].strip()
             # 限制长度
             if len(rewritten) > 100:
                 rewritten = rewritten[:100]
@@ -339,6 +328,8 @@ class DegradationStrategy:
 
         使用智谱 GLM-4-Flash + 联网搜索插件
         """
+        import requests
+
         try:
             resp = requests.post(
                 f"{settings.zhipu_base_url}/chat/completions",
@@ -404,6 +395,8 @@ class DegradationStrategy:
 
     def _tavily_web_search(self, query: str, api_key: str) -> list[dict]:
         """Tavily Search API"""
+        import requests
+
         try:
             resp = requests.post(
                 "https://api.tavily.com/search",
@@ -434,16 +427,21 @@ class DegradationStrategy:
 
 # ── 模块级单例 ──
 
+import threading
+
 _strategy_instance: Optional[DegradationStrategy] = None
+_lock = threading.Lock()
 
 
 def get_degradation_strategy(retriever=None) -> DegradationStrategy:
     """获取降级策略单例"""
     global _strategy_instance
     if _strategy_instance is None:
-        if retriever is None:
-            from .retriever import get_retriever
+        with _lock:
+            if _strategy_instance is None:
+                if retriever is None:
+                    from .retriever import get_retriever
 
-            retriever = get_retriever()
-        _strategy_instance = DegradationStrategy(retriever)
+                    retriever = get_retriever()
+                _strategy_instance = DegradationStrategy(retriever)
     return _strategy_instance

@@ -194,11 +194,16 @@ class StructuredLogger:
 
 # ── 模块级单例 ──
 
+import threading
+
 _logger_instance: Optional[StructuredLogger] = None
+_lock = threading.Lock()
 
 
 def get_logger(name: str = "app") -> StructuredLogger:
     global _logger_instance
     if _logger_instance is None:
-        _logger_instance = StructuredLogger(name)
+        with _lock:
+            if _logger_instance is None:
+                _logger_instance = StructuredLogger(name)
     return _logger_instance

@@ -61,8 +61,8 @@ class Retriever:
         filter_by_doc_type: Optional[str] = None,
         filter_by_source: Optional[str] = None,
         threshold: Optional[float] = None,
-        sparse_weight: float = 0.5,
-        dense_weight: float = 0.5,
+        sparse_weight: float = 0.3,  # BM25 关键词权重 (辅助)
+        dense_weight: float = 0.7,  # 语义向量权重 (主力)
     ) -> SearchResponse:
         """检索相关文档
 
@@ -74,8 +74,8 @@ class Retriever:
             filter_by_doc_type: 按文档类型过滤
             filter_by_source: 按来源文件过滤
             threshold: 最低相似度阈值
-            sparse_weight: BM25 权重 (默认 0.5)
-            dense_weight: 稠密向量权重 (默认 0.5)
+            sparse_weight: BM25 关键词权重 (默认 0.3)
+            dense_weight: 稠密向量权重 (默认 0.7)
         """
         if threshold is None:
             threshold = settings.retrieval_similarity_threshold
@@ -84,7 +84,8 @@ class Retriever:
 
         # ── 查询缓存 ──
         cache = _get_cache()
-        cache_key = f"{query}:{top_k}:{use_hybrid}:{use_rerank}"
+        # 关键修复: 缓存 Key 包含所有查询参数（含过滤条件），避免返回错误缓存
+        cache_key = f"{query}:{top_k}:{use_hybrid}:{use_rerank}:{filter_by_doc_type}:{filter_by_source}:{threshold}"
         cached = cache.get_query_result(cache_key)
         if cached:
             logger.debug("缓存命中: %s", query[:50])
@@ -93,9 +94,12 @@ class Retriever:
         # ── 构建过滤表达式 ──
         filter_parts = []
         if filter_by_doc_type:
-            filter_parts.append(f'doc_type == "{filter_by_doc_type}"')
+            # 修复: 转义双引号，防止 Milvus 表达式注入
+            safe_doc_type = filter_by_doc_type.replace('"', '\\"')
+            filter_parts.append(f'doc_type == "{safe_doc_type}"')
         if filter_by_source:
-            filter_parts.append(f'source_file == "{filter_by_source}"')
+            safe_source = filter_by_source.replace('"', '\\"')
+            filter_parts.append(f'source_file == "{safe_source}"')
         filter_expr = " && ".join(filter_parts) if filter_parts else None
 
         # ── 向量化 ──
@@ -223,12 +227,10 @@ class Retriever:
 
 # ── 模块级单例 ──
 
-_retriever_instance: Optional[Retriever] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_retriever() -> Retriever:
     """获取 Retriever 单例"""
-    global _retriever_instance
-    if _retriever_instance is None:
-        _retriever_instance = Retriever()
-    return _retriever_instance
+    return Retriever()

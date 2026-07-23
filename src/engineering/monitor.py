@@ -314,11 +314,9 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> flo
 
 # ── 模块级单例 ──
 
-_monitor_instance: Optional[QueryMonitor] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_monitor() -> QueryMonitor:
-    global _monitor_instance
-    if _monitor_instance is None:
-        _monitor_instance = QueryMonitor()
-    return _monitor_instance
+    return QueryMonitor()

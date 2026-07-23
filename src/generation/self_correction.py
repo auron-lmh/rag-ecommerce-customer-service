@@ -6,15 +6,14 @@
   3. 如果有幻觉 → 提取缺失信息 → 改写 query → 重新检索
   4. 合并文档 → 重新生成
   5. 重复直到无幻觉或达到最大轮数
+
+使用统一 LLMClient 替代原始 requests 调用。
 """
 
 import logging
 from typing import Optional
 
-import requests
-
-from src.config import settings
-from src.embedding.models import SearchResponse
+from src.engineering.llm_client import get_llm_client
 
 from .hallucination_detector import HallucinationDetector, get_detector
 from .models import GenerationResult, HallucinationCheck
@@ -23,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # 最大自纠正轮数
 MAX_CORRECTION_ROUNDS = 2
+
+# LLM 调用预算（防止延迟爆炸）
+MAX_LLM_CALLS = 8
 
 # 生成 System Prompt
 GENERATION_PROMPT = """你是一个电商客服助手。请基于以下参考文档回答用户问题。
@@ -75,7 +77,7 @@ class SelfCorrector:
         max_rounds: int = MAX_CORRECTION_ROUNDS,
         faithfulness_threshold: float = 0.8,
     ) -> GenerationResult:
-        """带自纠正的生成
+        """带自纠正的生成（包含初始检索，适合独立调用）
 
         Args:
             query: 用户查询
@@ -96,11 +98,51 @@ class SelfCorrector:
         docs = [r.text for r in search_response.results]
         sources = [r.source_file for r in search_response.results]
 
-        # ── 步骤2: 生成回答 ──
-        answer = self._generate(query, docs)
+        # ── 步骤2-5: 复用 generate_with_docs ──
+        return self.generate_with_docs(
+            query=query,
+            docs=docs,
+            sources=sources,
+            top_k=top_k,
+            use_rerank=use_rerank,
+            max_rounds=max_rounds,
+            faithfulness_threshold=faithfulness_threshold,
+        )
 
-        # ── 步骤3: 幻觉检测 ──
+    def generate_with_docs(
+        self,
+        query: str,
+        docs: list[str],
+        sources: list[str],
+        top_k: int = 5,
+        use_rerank: bool = True,
+        max_rounds: int = MAX_CORRECTION_ROUNDS,
+        faithfulness_threshold: float = 0.8,
+    ) -> GenerationResult:
+        """基于已有文档生成回答（供 LangGraph workflow 调用，跳过初始检索）
+
+        Args:
+            query: 用户查询
+            docs: 已检索的文档文本列表（来自 retriever_node）
+            sources: 文档来源文件名列表
+            top_k: 检索结果数（纠正循环中重新检索时使用）
+            use_rerank: 是否启用 Reranker
+            max_rounds: 最大纠正轮数
+            faithfulness_threshold: 忠实度阈值
+
+        Returns:
+            GenerationResult
+        """
+        # LLM 调用计数器（防止延迟爆炸）
+        llm_call_count = 0
+
+        # ── 步骤1: 基于已有文档生成回答 ──
+        answer = self._generate(query, docs)
+        llm_call_count += 1
+
+        # ── 步骤2: 幻觉检测 ──
         check = self.detector.check(answer, docs)
+        llm_call_count += 1
 
         if (
             not check.has_hallucination
@@ -115,17 +157,29 @@ class SelfCorrector:
                 was_corrected=False,
             )
 
-        # ── 步骤4: 自纠正循环 ──
+        # ── 步骤3: 自纠正循环（带 LLM 调用预算） ──
         for round_num in range(1, max_rounds + 1):
+            # 检查 LLM 调用预算
+            if llm_call_count >= MAX_LLM_CALLS:
+                logger.warning(
+                    "LLM 调用已达预算上限 (%d/%d)，停止纠正",
+                    llm_call_count,
+                    MAX_LLM_CALLS,
+                )
+                break
+
             logger.info(
-                "自纠正轮次 %d/%d: faithfulness=%.2f",
+                "自纠正轮次 %d/%d: faithfulness=%.2f, LLM调用=%d/%d",
                 round_num,
                 max_rounds,
                 check.overall_faithfulness,
+                llm_call_count,
+                MAX_LLM_CALLS,
             )
 
             # 提取缺失信息
             missing_info = self._extract_missing_info(query, check)
+            llm_call_count += 1
 
             # 改写 query 重新检索
             refined_query = f"{query} {missing_info}"
@@ -136,17 +190,19 @@ class SelfCorrector:
             )
 
             # 合并文档（去重）
-            new_docs = [r.text for r in new_response.results]
-            merged_docs = self._merge_docs(docs, new_docs)
+            new_docs_list = [r.text for r in new_response.results]
+            merged_docs = self._merge_docs(docs, new_docs_list)
             new_sources = list(
                 set(sources + [r.source_file for r in new_response.results])
             )
 
             # 重新生成
             answer = self._generate(query, merged_docs)
+            llm_call_count += 1
 
             # 重新检测
             check = self.detector.check(answer, merged_docs)
+            llm_call_count += 1
             docs = merged_docs
             sources = new_sources
 
@@ -163,7 +219,7 @@ class SelfCorrector:
                     was_corrected=True,
                 )
 
-        # ── 步骤5: 兜底处理 ──
+        # ── 步骤4: 兜底处理 ──
         logger.warning("自纠正 %d 轮后仍有幻觉，降级为部分回答", max_rounds)
         fallback_answer = self._build_fallback_answer(query, answer, check)
 
@@ -178,7 +234,7 @@ class SelfCorrector:
         )
 
     def _generate(self, query: str, docs: list[str]) -> str:
-        """调用 LLM 生成回答（带缓存）"""
+        """调用 LLM 生成回答（带缓存，使用统一 LLMClient）"""
         context = "\n\n".join(f"[文档{i+1}] {d[:800]}" for i, d in enumerate(docs[:5]))
         prompt = GENERATION_PROMPT.format(context=context, query=query)
 
@@ -194,71 +250,48 @@ class SelfCorrector:
         except Exception:
             pass
 
-        try:
-            resp = requests.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.default_model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 1024,
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-            result = resp.json()["choices"][0]["message"]["content"].strip()
+        client = get_llm_client()
+        result = client.chat_with_fallback(
+            messages=[{"role": "user", "content": prompt}],
+            fallback_value="抱歉，生成回答时出现错误，请稍后重试。",
+            temperature=0.3,
+            max_tokens=1024,
+            timeout=30,
+        )
 
-            # 存入缓存
+        # 存入缓存
+        if result:
             try:
                 cache.set_llm_response(prompt, result, ttl=3600)
             except Exception:
                 pass
 
-            return result
-        except Exception as e:
-            logger.error("生成失败: %s", e)
-            return "抱歉，生成回答时出现错误，请稍后重试。"
+        return result
 
     def _extract_missing_info(self, query: str, check: HallucinationCheck) -> str:
-        """从幻觉检测结果中提取缺失信息"""
+        """从幻觉检测结果中提取缺失信息（使用统一 LLMClient）"""
         hallucination_details = "\n".join(
             f"- {c.text}: {c.reason}"
             for c in check.claims
             if c.verdict.value == "hallucination"
         )
 
-        try:
-            resp = requests.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.default_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": EXTRACT_MISSING_PROMPT.format(
-                                query=query,
-                                hallucination_details=hallucination_details,
-                            ),
-                        }
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 100,
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            logger.warning("缺失信息提取失败: %s", e)
-            return ""
+        client = get_llm_client()
+        return client.chat_with_fallback(
+            messages=[
+                {
+                    "role": "user",
+                    "content": EXTRACT_MISSING_PROMPT.format(
+                        query=query,
+                        hallucination_details=hallucination_details,
+                    ),
+                }
+            ],
+            fallback_value="",
+            temperature=0.1,
+            max_tokens=100,
+            timeout=15,
+        )
 
     def _merge_docs(self, existing: list[str], new: list[str]) -> list[str]:
         """合并文档列表（简单去重）"""
@@ -302,15 +335,20 @@ class SelfCorrector:
 
 # ── 模块级单例 ──
 
+import threading
+
 _corrector_instance: Optional[SelfCorrector] = None
+_lock = threading.Lock()
 
 
 def get_corrector(retriever=None) -> SelfCorrector:
     global _corrector_instance
     if _corrector_instance is None:
-        if retriever is None:
-            from src.embedding.retriever import get_retriever
+        with _lock:
+            if _corrector_instance is None:
+                if retriever is None:
+                    from src.embedding.retriever import get_retriever
 
-            retriever = get_retriever()
-        _corrector_instance = SelfCorrector(retriever)
+                    retriever = get_retriever()
+                _corrector_instance = SelfCorrector(retriever)
     return _corrector_instance

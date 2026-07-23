@@ -3,6 +3,7 @@
 流式输出 + 多轮对话管理
 """
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -67,7 +68,7 @@ async def chat_stream(
         docs = []
         sources = []
 
-        # 检索阶段
+        # 检索阶段（用 asyncio.to_thread 包装同步阻塞调用，避免阻塞事件循环）
         if need_retrieval and route_result.target in (
             RouteTarget.RAG,
             RouteTarget.HYBRID,
@@ -76,7 +77,10 @@ async def chat_stream(
             yield f"data: {json.dumps({'event': 'status', 'data': '检索中...'})}\n\n"
 
             strategy = get_degradation_strategy(retriever)
-            degradation_result = strategy.search_with_degradation(
+
+            # 关键修复: 用 asyncio.to_thread 包装同步阻塞的检索调用
+            degradation_result = await asyncio.to_thread(
+                strategy.search_with_degradation,
                 query=route_result.rewritten_query,
                 top_k=top_k,
                 use_rerank=use_reranker,
@@ -91,31 +95,38 @@ async def chat_stream(
         yield f"data: {json.dumps({'event': 'status', 'data': '生成中...'})}\n\n"
 
         full_response = ""
-        async for event in streaming_gen.stream_generate(
-            query=query,
-            docs=docs,
-            session_history=history,
-        ):
-            if event.event == "token":
-                full_response += event.data
-                yield f"data: {json.dumps({'event': 'token', 'data': event.data})}\n\n"
-            elif event.event == "done":
-                # 保存到会话历史
-                session_manager.add_message(
-                    session_id,
-                    Message(
-                        role="user",
-                        content=query,
-                        intent=route_result.intent_result.intent.value,
-                    ),
-                )
-                session_manager.add_message(
-                    session_id,
-                    Message(role="assistant", content=full_response, sources=sources),
-                )
-                yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
-            elif event.event == "error":
-                yield f"data: {json.dumps({'event': 'error', 'data': event.data})}\n\n"
+        try:
+            async for event in streaming_gen.stream_generate(
+                query=query,
+                docs=docs,
+                session_history=history,
+            ):
+                if event.event == "token":
+                    full_response += event.data
+                    yield f"data: {json.dumps({'event': 'token', 'data': event.data})}\n\n"
+                elif event.event == "done":
+                    # 保存到会话历史
+                    session_manager.add_message(
+                        session_id,
+                        Message(
+                            role="user",
+                            content=query,
+                            intent=route_result.intent_result.intent.value,
+                        ),
+                    )
+                    session_manager.add_message(
+                        session_id,
+                        Message(
+                            role="assistant", content=full_response, sources=sources
+                        ),
+                    )
+                    yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
+                elif event.event == "error":
+                    yield f"data: {json.dumps({'event': 'error', 'data': event.data})}\n\n"
+        except Exception as e:
+            # 关键修复: 异常时发送 error 事件，避免客户端一直等待
+            logger.error("流式生成异常: %s", e)
+            yield f"data: {json.dumps({'event': 'error', 'data': str(e)})}\n\n"
 
     return StreamingResponse(
         event_generator(),

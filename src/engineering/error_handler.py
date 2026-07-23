@@ -239,11 +239,9 @@ class ErrorContext:
 
 # ── 模块级单例 ──
 
-_handler_instance: Optional[ErrorHandler] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_error_handler() -> ErrorHandler:
-    global _handler_instance
-    if _handler_instance is None:
-        _handler_instance = ErrorHandler()
-    return _handler_instance
+    return ErrorHandler()

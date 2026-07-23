@@ -320,11 +320,9 @@ class CacheManager:
 
 # ── 模块级单例 ──
 
-_cache_instance: Optional[CacheManager] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_cache() -> CacheManager:
-    global _cache_instance
-    if _cache_instance is None:
-        _cache_instance = CacheManager()
-    return _cache_instance
+    return CacheManager()

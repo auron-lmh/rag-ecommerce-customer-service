@@ -206,11 +206,9 @@ class SessionManager:
 
 # ── 模块级单例 ──
 
-_manager_instance: Optional[SessionManager] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_session_manager() -> SessionManager:
-    global _manager_instance
-    if _manager_instance is None:
-        _manager_instance = SessionManager()
-    return _manager_instance
+    return SessionManager()

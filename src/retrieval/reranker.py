@@ -269,11 +269,9 @@ class Reranker:
 # 模块级单例
 # ═══════════════════════════════════════
 
-_reranker_instance: Optional[Reranker] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_reranker() -> Reranker:
-    global _reranker_instance
-    if _reranker_instance is None:
-        _reranker_instance = Reranker()
-    return _reranker_instance
+    return Reranker()

@@ -10,6 +10,8 @@
 import logging
 from typing import Optional
 
+from src.engineering.llm_client import get_llm_client
+
 from .classifier import IntentClassifier, get_classifier
 from .models import Intent, IntentResult, RouteResult, RouteTarget
 
@@ -92,31 +94,19 @@ class IntentRouter:
     def _rewrite_query(self, query: str) -> str:
         """查询改写 — 口语化 → 检索友好"""
         try:
-            import requests
-
-            from src.config import settings
-
-            resp = requests.post(
-                f"{settings.deepseek_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.deepseek_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": settings.default_model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": QUERY_REWRITE_PROMPT.format(query=query),
-                        }
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 100,
-                },
+            client = get_llm_client()
+            rewritten = client.chat_with_fallback(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": QUERY_REWRITE_PROMPT.format(query=query),
+                    }
+                ],
+                fallback_value=query,
+                temperature=0.1,
+                max_tokens=100,
                 timeout=10,
             )
-            resp.raise_for_status()
-            rewritten = resp.json()["choices"][0]["message"]["content"].strip()
             # 防止 LLM 返回多余内容
             if len(rewritten) > 100:
                 rewritten = rewritten[:100]
@@ -129,11 +119,9 @@ class IntentRouter:
 
 # ── 模块级单例 ──
 
-_router_instance: Optional[IntentRouter] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_router() -> IntentRouter:
-    global _router_instance
-    if _router_instance is None:
-        _router_instance = IntentRouter()
-    return _router_instance
+    return IntentRouter()

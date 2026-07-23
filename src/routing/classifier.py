@@ -7,9 +7,7 @@ import json
 import logging
 from typing import Optional
 
-import requests
-
-from src.config import settings
+from src.engineering.llm_client import LLMClient, LLMClientError, get_llm_client
 
 from .models import Intent, IntentResult
 
@@ -100,13 +98,17 @@ class IntentClassifier:
 
     def __init__(
         self,
+        client: Optional[LLMClient] = None,
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
     ):
-        self.model = model or settings.default_model  # deepseek-chat
-        self._api_key = api_key or settings.deepseek_api_key
-        self._base_url = base_url or settings.deepseek_base_url
+        if client is not None:
+            self._client = client
+        elif model or api_key or base_url:
+            self._client = LLMClient(model=model, api_key=api_key, base_url=base_url)
+        else:
+            self._client = get_llm_client()
 
     def classify(self, user_message: str) -> IntentResult:
         """分类用户意图
@@ -119,42 +121,31 @@ class IntentClassifier:
         """
         try:
             return self._call_llm(user_message)
-        except Exception as e:
+        except LLMClientError as e:
             logger.error("意图分类失败，降级为关键词匹配: %s", e)
             return self._fallback_classify(user_message)
 
     def _call_llm(self, user_message: str) -> IntentResult:
         """调用 LLM Function Calling"""
-        resp = requests.post(
-            f"{self._base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
+        raw_args = self._client.chat(
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            tools=[INTENT_TOOL],
+            tool_choice={
+                "type": "function",
+                "function": {"name": "classify_intent"},
             },
-            json={
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_message},
-                ],
-                "tools": [INTENT_TOOL],
-                "tool_choice": {
-                    "type": "function",
-                    "function": {"name": "classify_intent"},
-                },
-                "temperature": 0.1,
-                "max_tokens": 512,
-            },
+            temperature=0.1,
+            max_tokens=512,
             timeout=15,
         )
-        resp.raise_for_status()
 
-        data = resp.json()
-        tool_calls = data["choices"][0]["message"].get("tool_calls", [])
-        if not tool_calls:
+        if not raw_args:
             raise RuntimeError("LLM 未返回 tool_call")
 
-        args = json.loads(tool_calls[0]["function"]["arguments"])
+        args = json.loads(raw_args)
         intent_str = args.get("intent", "chitchat")
 
         try:
@@ -228,11 +219,9 @@ class IntentClassifier:
 
 # ── 模块级单例 ──
 
-_classifier_instance: Optional[IntentClassifier] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_classifier() -> IntentClassifier:
-    global _classifier_instance
-    if _classifier_instance is None:
-        _classifier_instance = IntentClassifier()
-    return _classifier_instance
+    return IntentClassifier()

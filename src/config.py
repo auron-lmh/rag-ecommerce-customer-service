@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     reranker_top_n: int = 5  # 重排序后返回数
 
     # ========== Milvus ==========
-    milvus_host: str = "192.168.191.128"
+    milvus_host: str = "127.0.0.1"
     milvus_port: int = 19530
     milvus_user: str = "root"
     milvus_password: str = "Milvus"

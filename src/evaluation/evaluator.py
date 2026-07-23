@@ -1,9 +1,17 @@
 """模块14 检索评估器 — 自动化评测脚本
 
+评估指标:
+    recall@K        → Embedding 语义相似度（替代子串匹配）
+    mrr             → Embedding 语义相似度排名
+    faithfulness    → LLM G-Eval（精确模式）/ Embedding 相似度（快速模式）
+
 使用:
     evaluator = RetrievalEvaluator(retriever)
     results = evaluator.evaluate_dataset(test_cases)
     print(results["recall@5"])
+
+    # 精确模式（使用 LLM 评估忠实度）
+    results = evaluator.evaluate_dataset(test_cases, use_llm_eval=True)
 """
 
 import json
@@ -76,11 +84,14 @@ class RetrievalEvaluator:
             self._retriever = get_retriever()
         return self._retriever
 
-    def evaluate_query(self, test_case: TestCase) -> EvalResult:
-        """评测单条查询
+    def evaluate_query(
+        self, test_case: TestCase, use_llm_eval: bool = False
+    ) -> EvalResult:
+        """评测单条查询（仅检索，不生成）
 
         Args:
             test_case: 测试用例
+            use_llm_eval: 是否使用 LLM 评估忠实度（默认 False 用快速模式）
 
         Returns:
             EvalResult
@@ -103,7 +114,9 @@ class RetrievalEvaluator:
         )
         mrr = calculate_mrr(retrieved_docs, test_case.ground_truth_answer)
         faithfulness = calculate_faithfulness(
-            test_case.ground_truth_answer, retrieved_docs
+            test_case.ground_truth_answer,
+            retrieved_docs,
+            use_llm=use_llm_eval,
         )
         keyword_coverage = calculate_keyword_coverage(
             test_case.ground_truth_answer,
@@ -125,19 +138,100 @@ class RetrievalEvaluator:
             retrieved_docs=retrieved_docs[:3],
         )
 
-    def evaluate_dataset(self, test_cases: list[TestCase]) -> dict:
+    def evaluate_query_with_generation(
+        self, test_case: TestCase, use_llm_eval: bool = False
+    ) -> EvalResult:
+        """评测单条查询（完整 RAG 流程：检索 + 生成）
+
+        关键修复: 评测实际生成的回答，而非标准答案
+
+        Args:
+            test_case: 测试用例
+            use_llm_eval: 是否使用 LLM 评估忠实度
+
+        Returns:
+            EvalResult
+        """
+        t0 = time.time()
+
+        # 使用 SelfCorrector 运行完整 RAG 流程
+        from src.generation import get_corrector
+
+        corrector = get_corrector(self.retriever)
+
+        result = corrector.generate_with_correction(
+            query=test_case.question,
+            top_k=5,
+            use_rerank=True,
+        )
+        latency_ms = (time.time() - t0) * 1000
+
+        generated_answer = result.answer
+        retrieved_docs = (
+            [r.text for r in result.sources] if hasattr(result, "sources") else []
+        )
+
+        # 计算指标（使用实际生成的回答）
+        recall_at_5 = calculate_recall(
+            retrieved_docs, test_case.ground_truth_answer, k=5
+        )
+        mrr = calculate_mrr(retrieved_docs, test_case.ground_truth_answer)
+
+        # 关键: 用实际生成的回答评估忠实度，而非标准答案
+        faithfulness = calculate_faithfulness(
+            generated_answer,
+            retrieved_docs,
+            use_llm=use_llm_eval,
+        )
+        keyword_coverage = calculate_keyword_coverage(
+            generated_answer,
+            test_case.must_contain_keywords,
+        )
+        latency_score = calculate_latency_score(latency_ms)
+
+        return EvalResult(
+            question=test_case.question,
+            recall_at_5=recall_at_5,
+            mrr=mrr,
+            faithfulness=faithfulness,
+            keyword_coverage=keyword_coverage,
+            latency_ms=latency_ms,
+            latency_score=latency_score,
+            hallucination_detected=result.was_corrected,
+            correction_rounds=result.correction_rounds,
+            answer=generated_answer,
+            retrieved_docs=retrieved_docs[:3],
+        )
+
+    def evaluate_dataset(
+        self,
+        test_cases: list[TestCase],
+        use_llm_eval: bool = False,
+        with_generation: bool = False,
+    ) -> dict:
         """评测数据集
 
         Args:
             test_cases: 测试用例列表
+            use_llm_eval: 是否使用 LLM 评估忠实度（默认 False 用快速 Embedding 模式）
+            with_generation: 是否运行完整 RAG 流程（检索+生成），默认 False 仅检索
 
         Returns:
             评测结果汇总
         """
+        eval_mode = "LLM 精确模式" if use_llm_eval else "Embedding 快速模式"
+        gen_mode = "完整 RAG" if with_generation else "仅检索"
+        logger.info("开始评测 %d 条用例 (%s, %s)", len(test_cases), eval_mode, gen_mode)
+
         results = []
         for i, tc in enumerate(test_cases):
             logger.info("评测 %d/%d: %s", i + 1, len(test_cases), tc.question[:50])
-            result = self.evaluate_query(tc)
+            if with_generation:
+                result = self.evaluate_query_with_generation(
+                    tc, use_llm_eval=use_llm_eval
+                )
+            else:
+                result = self.evaluate_query(tc, use_llm_eval=use_llm_eval)
             results.append(result)
 
         # 汇总
@@ -257,11 +351,9 @@ class RetrievalEvaluator:
 
 # ── 模块级单例 ──
 
-_evaluator_instance: Optional[RetrievalEvaluator] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_evaluator() -> RetrievalEvaluator:
-    global _evaluator_instance
-    if _evaluator_instance is None:
-        _evaluator_instance = RetrievalEvaluator()
-    return _evaluator_instance
+    return RetrievalEvaluator()

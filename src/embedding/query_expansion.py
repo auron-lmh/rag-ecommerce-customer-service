@@ -14,9 +14,7 @@ import json
 import logging
 from typing import Optional
 
-import requests
-
-from src.config import settings
+from src.engineering.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +71,8 @@ class QueryExpander:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
     ):
-        self.model = model or settings.default_model
-        self._api_key = api_key or settings.deepseek_api_key
-        self._base_url = base_url or settings.deepseek_base_url
+        # 参数保留用于向后兼容，实际 LLM 调用统一通过 get_llm_client()
+        pass
 
     def multi_query(self, query: str, num_queries: int = 3) -> list[str]:
         """Multi-Query 扩展
@@ -90,27 +87,16 @@ class QueryExpander:
             子查询列表（包含原始查询）
         """
         try:
-            resp = requests.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": MULTI_QUERY_PROMPT.format(query=query),
-                        }
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 200,
-                },
+            client = get_llm_client()
+            content = client.chat_with_fallback(
+                messages=[
+                    {"role": "user", "content": MULTI_QUERY_PROMPT.format(query=query)}
+                ],
+                fallback_value="[]",
+                temperature=0.3,
+                max_tokens=200,
                 timeout=15,
             )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
 
             # 解析 JSON 数组
             if "[" in content and "]" in content:
@@ -142,27 +128,14 @@ class QueryExpander:
             假设性文档文本
         """
         try:
-            resp = requests.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": HYDE_PROMPT.format(query=query),
-                        }
-                    ],
-                    "temperature": 0.5,
-                    "max_tokens": 300,
-                },
+            client = get_llm_client()
+            return client.chat_with_fallback(
+                messages=[{"role": "user", "content": HYDE_PROMPT.format(query=query)}],
+                fallback_value=query,
+                temperature=0.5,
+                max_tokens=300,
                 timeout=15,
             )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
 
         except Exception as e:
             logger.warning("HyDE 扩展失败: %s", e)
@@ -199,12 +172,10 @@ class QueryExpander:
 
 # ── 模块级单例 ──
 
-_expander_instance: Optional[QueryExpander] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_query_expander() -> QueryExpander:
     """获取 QueryExpander 单例"""
-    global _expander_instance
-    if _expander_instance is None:
-        _expander_instance = QueryExpander()
-    return _expander_instance
+    return QueryExpander()

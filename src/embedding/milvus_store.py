@@ -63,12 +63,16 @@ class MilvusStore:
         self.user = user or settings.milvus_user
         self.password = password or settings.milvus_password
         self._uri = f"http://{self.host}:{self.port}"
+        self._client: Optional[MilvusClient] = None  # 实例级单例
 
     @property
     def client(self) -> MilvusClient:
-        return MilvusClient(
-            uri=self._uri, user=self.user, password=self.password, timeout=10
-        )
+        """获取 MilvusClient 单例（实例级复用，避免每次请求新建连接）"""
+        if self._client is None:
+            self._client = MilvusClient(
+                uri=self._uri, user=self.user, password=self.password, timeout=10
+            )
+        return self._client
 
     # ── 健康检查 ──
 
@@ -163,14 +167,24 @@ class MilvusStore:
     # ── 自检 ──
 
     def _ensure_ready(self):
-        """每次操作前检查: Milvus可达 + collection存在 + 已加载"""
+        """每次操作前检查: Milvus可达 + collection存在 + 已加载
+
+        优化: 使用 get_load_state 检查，避免每次都调用 load_collection
+        """
         if not self.health_check():
             raise ConnectionError(f"Milvus 不可达 ({self._uri})，请检查虚拟机是否运行")
         if not self.collection_exists():
             raise RuntimeError(
                 f"Collection '{COLLECTION_NAME}' 不存在，请先调用 create_collection() 或重启应用"
             )
-        self.client.load_collection(COLLECTION_NAME)
+        # 检查加载状态，避免每次都调用 load_collection（重操作）
+        try:
+            state = self.client.get_load_state(COLLECTION_NAME)
+            if state.get("state") != "loaded":
+                self.client.load_collection(COLLECTION_NAME)
+        except Exception:
+            # get_load_state 可能不可用，降级为直接加载
+            self.client.load_collection(COLLECTION_NAME)
 
     # ── 写入 ──
 
@@ -235,8 +249,8 @@ class MilvusStore:
         query_vector: list[float],
         query_text: str,
         top_k: int = 5,
-        sparse_weight: float = 0.5,
-        dense_weight: float = 0.5,
+        sparse_weight: float = 0.3,  # BM25 关键词权重 (辅助)
+        dense_weight: float = 0.7,  # 语义向量权重 (主力)
         filter_expr: Optional[str] = None,
         threshold: float = 0.0,
     ) -> SearchResponse:

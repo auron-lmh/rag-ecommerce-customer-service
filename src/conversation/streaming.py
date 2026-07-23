@@ -1,19 +1,18 @@
 """模块6.5 流式生成器 — SSE (Server-Sent Events) 流式输出
 
+基于统一 LLMClient 实现流式生成，自动支持异步/同步双模式。
+
 使用:
     generator = StreamingGenerator()
     async for event in generator.stream_generate(query, docs):
         print(event.data)
 """
 
-import json
 import logging
 from collections.abc import AsyncGenerator
 from typing import Optional
 
-import requests
-
-from src.config import settings
+from src.engineering.llm_client import LLMClientError, get_llm_client
 
 from .models import StreamEvent
 
@@ -35,105 +34,25 @@ STREAM_PROMPT = """你是一个电商客服助手。请基于以下参考文档�
 
 
 class StreamingGenerator:
-    """流式生成器 — SSE 输出
+    """流式生成器 — 基于 LLMClient 的 RAG 专用流式封装
 
     使用方式:
         generator = StreamingGenerator()
         async for event in generator.stream_generate(query, docs):
             if event.event == "token":
                 print(event.data, end="")
-            elif event.event == "done":
-                print("\n完成")
     """
 
-    def __init__(
-        self,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-    ):
-        self.model = model or settings.default_model
-        self._api_key = api_key or settings.deepseek_api_key
-        self._base_url = base_url or settings.deepseek_base_url
+    def __init__(self):
+        self._client = get_llm_client()
 
-    async def stream_generate(
+    def _build_messages(
         self,
         query: str,
         docs: list[str],
         session_history: Optional[list[dict]] = None,
-    ) -> AsyncGenerator[StreamEvent, None]:
-        """流式生成回答
-
-        Args:
-            query: 用户查询
-            docs: 参考文档列表
-            session_history: 对话历史（可选）
-
-        Yields:
-            StreamEvent
-        """
-        context = "\n\n".join(f"[文档{i+1}] {d[:800]}" for i, d in enumerate(docs[:5]))
-
-        messages = []
-        if session_history:
-            messages.extend(session_history[-6:])  # 最近3轮
-        messages.append(
-            {
-                "role": "user",
-                "content": STREAM_PROMPT.format(context=context, query=query),
-            }
-        )
-
-        try:
-            resp = requests.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0.3,
-                    "max_tokens": 1024,
-                    "stream": True,
-                },
-                stream=True,
-                timeout=60,
-            )
-            resp.raise_for_status()
-
-            event_id = 0
-            for line in resp.iter_lines():
-                if not line:
-                    continue
-                line = line.decode("utf-8")
-                if line.startswith("data: "):
-                    data = line[6:]
-                    if data == "[DONE]":
-                        yield StreamEvent(event="done", data="[DONE]", id=event_id)
-                        break
-                    try:
-                        chunk = json.loads(data)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            event_id += 1
-                            yield StreamEvent(event="token", data=content, id=event_id)
-                    except json.JSONDecodeError:
-                        continue
-
-        except Exception as e:
-            logger.error("流式生成失败: %s", e)
-            yield StreamEvent(event="error", data=str(e))
-
-    def generate(
-        self,
-        query: str,
-        docs: list[str],
-        session_history: Optional[list[dict]] = None,
-    ) -> str:
-        """非流式生成（同步版本）"""
+    ) -> list[dict]:
+        """构建 RAG prompt 消息"""
         context = "\n\n".join(f"[文档{i+1}] {d[:800]}" for i, d in enumerate(docs[:5]))
 
         messages = []
@@ -145,36 +64,77 @@ class StreamingGenerator:
                 "content": STREAM_PROMPT.format(context=context, query=query),
             }
         )
+        return messages
+
+    async def stream_generate(
+        self,
+        query: str,
+        docs: list[str],
+        session_history: Optional[list[dict]] = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """流式生成回答（真正的异步 SSE，委托给 LLMClient）"""
+        messages = self._build_messages(query, docs, session_history)
 
         try:
-            resp = requests.post(
-                f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": messages,
-                    "temperature": 0.3,
-                    "max_tokens": 1024,
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            logger.error("生成失败: %s", e)
-            return "抱歉，生成回答时出现错误，请稍后重试。"
+            event_id = 0
+            async for token in self._client.achat_stream(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=1024,
+                timeout=60,
+            ):
+                event_id += 1
+                yield StreamEvent(event="token", data=token, id=event_id)
+
+            yield StreamEvent(event="done", data="[DONE]", id=event_id)
+
+        except LLMClientError as e:
+            logger.error("流式生成失败: %s", e)
+            yield StreamEvent(event="error", data=str(e))
+
+    async def generate_async(
+        self,
+        query: str,
+        docs: list[str],
+        session_history: Optional[list[dict]] = None,
+    ) -> str:
+        """非流式生成（异步版本 — 委托给 LLMClient）"""
+        messages = self._build_messages(query, docs, session_history)
+        return await self._client.achat_with_fallback(
+            messages=messages,
+            fallback_value="抱歉，生成回答时出现错误，请稍后重试。",
+            temperature=0.3,
+            max_tokens=1024,
+            timeout=60,
+        )
+
+    def generate(
+        self,
+        query: str,
+        docs: list[str],
+        session_history: Optional[list[dict]] = None,
+    ) -> str:
+        """非流式生成（同步版本 — 委托给 LLMClient）"""
+        messages = self._build_messages(query, docs, session_history)
+        return self._client.chat_with_fallback(
+            messages=messages,
+            fallback_value="抱歉，生成回答时出现错误，请稍后重试。",
+            temperature=0.3,
+            max_tokens=1024,
+            timeout=30,
+        )
+
+    async def close(self) -> None:
+        """关闭底层 LLMClient 的异步连接"""
+        await self._client.close()
 
 
 # ── 模块级单例 ──
 
-_generator_instance: Optional[StreamingGenerator] = None
+from src.engineering.singleton import singleton_factory
 
 
+@singleton_factory
 def get_streaming_generator() -> StreamingGenerator:
-    global _generator_instance
-    if _generator_instance is None:
-        _generator_instance = StreamingGenerator()
-    return _generator_instance
+    """获取 StreamingGenerator 单例"""
+    return StreamingGenerator()
