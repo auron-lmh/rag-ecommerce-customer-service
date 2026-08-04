@@ -9,6 +9,7 @@ import logging
 from fastapi import APIRouter
 
 from src.api.models import ChatRequest, ChatResponse, SearchResultItem
+from src.config import settings
 from src.conversation import Message, get_session_manager, get_session_memory
 from src.engineering.pii_redactor import get_pii_redactor
 from src.graph import get_workflow
@@ -100,6 +101,40 @@ async def chat(req: ChatRequest) -> ChatResponse:
         )
     except Exception:
         logger.warning("记录会话记忆失败: %s", req.session_id)
+
+    # 成本监控: 记录本次查询（token 数按长度粗略估算，成本用官方价格折算）
+    try:
+        from src.engineering import get_monitor
+        from src.engineering.monitor import QueryRecord, estimate_cost
+
+        _answer = result.get("answer", "")
+        _completion_tokens = max(1, len(_answer) // 2)
+        _prompt_tokens = max(1, len(safe_query))
+        get_monitor().record(
+            QueryRecord(
+                user_query=safe_query,
+                intent=result.get("intent", ""),
+                retrieval_method=result.get("degradation_method", "hybrid"),
+                degradation_level=result.get("degradation_level", 1),
+                retrieval_docs_count=len(result.get("retrieved_docs", [])),
+                retrieval_time_ms=result.get("search_time_ms", 0),
+                hallucination_detected=result.get("was_corrected", False),
+                self_correction_rounds=result.get("correction_rounds", 0),
+                faithfulness=result.get("faithfulness", 0),
+                prompt_tokens=_prompt_tokens,
+                completion_tokens=_completion_tokens,
+                total_tokens=_prompt_tokens + _completion_tokens,
+                llm_cost=estimate_cost(
+                    settings.default_model, _prompt_tokens, _completion_tokens
+                ),
+                total_time_ms=result.get("search_time_ms", 0),
+                final_answer_length=len(_answer),
+                session_id=req.session_id,
+                model_used=settings.default_model,
+            )
+        )
+    except Exception as e:
+        logger.warning("成本监控记录失败: %s", e)
 
     # 构建响应
     response = ChatResponse(

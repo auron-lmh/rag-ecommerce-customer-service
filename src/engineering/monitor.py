@@ -33,12 +33,20 @@ logger = logging.getLogger(__name__)
 # SQLite 数据库路径
 DB_PATH = settings.data_dir / "monitoring.db"
 
-# API 定价（元/1000 tokens）
+# API 定价（元/1000 tokens）——成本估算用，实际以各平台官方控制台为准（价格会随促销调整）
 PRICING = {
+    # DeepSeek 官方 (2026-04): deepseek-chat → deepseek-v4-flash，输入1元/百万, 输出2元/百万
     "deepseek-chat": {"input": 0.001, "output": 0.002},
-    "qwen-plus": {"input": 0.004, "output": 0.012},
+    "deepseek-v4-flash": {"input": 0.001, "output": 0.002},
+    # Qwen-Plus (官方约 0.87/2.1 元/百万)
+    "qwen-plus": {"input": 0.001, "output": 0.002},
+    # 视觉模型（相对贵，估算）
     "qwen3.7-plus": {"input": 0.004, "output": 0.012},
     "qwen3.7-plus-2026-05-26": {"input": 0.004, "output": 0.012},
+    # OCR 视觉模型（估算）
+    "qwen-vl-ocr-2025-08-28": {"input": 0.008, "output": 0},
+    "qwen-vl-ocr-1028": {"input": 0.008, "output": 0},
+    # Embedding / Reranker（估算，通常 0.5~1 元/百万）
     "qwen3-vl-embedding": {"input": 0.001, "output": 0},
     "qwen2.5-vl-embedding": {"input": 0.001, "output": 0},
     "qwen3-vl-rerank": {"input": 0.001, "output": 0},
