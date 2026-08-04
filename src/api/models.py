@@ -49,6 +49,14 @@ class UploadRequest(BaseModel):
     recreate_collection: bool = Field(
         False, description="是否重建 collection（⚠️ 清空数据）"
     )
+    # 政策时效元数据（改进4）——电商政策频繁变更，需要版本/生效窗口管理
+    version: str | None = Field(None, description="文档版本号，如 v2")
+    effective_from: str | None = Field(
+        None, description="生效日期 YYYY-MM-DD（留空=立即生效）"
+    )
+    effective_to: str | None = Field(
+        None, description="过期日期 YYYY-MM-DD（留空=永不过期）"
+    )
 
 
 class UploadResponse(BaseModel):
@@ -95,6 +103,9 @@ class ChatRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=1000, description="用户问题")
     top_k: int = Field(5, ge=1, le=20, description="检索结果数")
     use_reranker: bool = Field(True, description="是否启用 Reranker")
+    session_id: str = Field(
+        "default", description="会话ID（多轮对话上下文，指代消解需要）"
+    )
 
 
 class ChatResponse(BaseModel):
@@ -117,3 +128,5 @@ class ChatResponse(BaseModel):
     needs_human: bool = False  # 是否需要人工介入
     human_reason: str = ""  # 人工介入原因
     human_priority: str = ""  # 人工介入优先级 (low/medium/high)
+    emotion: str = "calm"  # 情绪等级 calm/dissatisfied/angry/extreme
+    handoff_payload: dict = {}  # 转人工交接包（摘要/实体/情绪/已尝试动作）

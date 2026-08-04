@@ -34,4 +34,6 @@ RUN mkdir -p /app/data /app/logs
 EXPOSE 8000
 
 # 启动命令
-CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# --workers 1: 多 worker 会 fork 子进程，实测导致 DashScope embedding 跨进程不一致
+# （fork worker 与单进程产出不同向量，检索全挂）。单 worker 保证确定性。
+CMD ["uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

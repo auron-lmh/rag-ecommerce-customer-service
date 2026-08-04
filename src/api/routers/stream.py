@@ -20,6 +20,7 @@ from src.conversation import (
 )
 from src.embedding.degradation import get_degradation_strategy
 from src.embedding.retriever import Retriever
+from src.engineering.pii_redactor import get_pii_redactor
 from src.routing import RouteTarget, get_router
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,40 @@ async def chat_stream(
 
     history = [{"role": m.role, "content": m.content} for m in session.messages[-6:]]
 
+    # ── 第0步: PII 脱敏 ──
+    redactor = get_pii_redactor()
+    safe_query, pii_found = redactor.redact(query)
+    if pii_found:
+        logger.warning(
+            "PII 脱敏 (stream): 输入包含 %d 项敏感信息 (%s)",
+            len(pii_found),
+            ", ".join(f["type"] for f in pii_found),
+        )
+
     # 意图分类
     router_instance = get_router()
-    route_result = router_instance.route(query)
+    route_result = router_instance.route(safe_query)
+
+    # 情绪识别（改进: 愤怒/极端 → 安抚 + 优先转人工，不让机器人激化矛盾）
+    from src.conversation import (
+        get_coreference_resolver,
+        get_emotion_detector,
+        get_session_memory,
+    )
+
+    emotion_result = get_emotion_detector().detect(safe_query)
+    emotion = emotion_result.level.value
+    emotion_escalate = emotion in ("angry", "extreme")
+
+    # 多轮指代消解（改进: 结合历史 + 三层记忆补全追问，
+    # 如"那需要运费吗"→"退货需要运费吗"、"上次那个券"→"满300减50券"）
+    retrieval_query = route_result.rewritten_query
+    if not emotion_escalate:
+        memory_context = get_session_memory(session_id).build_context(safe_query)
+        if history or memory_context:
+            retrieval_query = get_coreference_resolver().resolve(
+                route_result.rewritten_query, history, memory_context
+            )
 
     # 智能重检索判断
     need_retrieval = True
@@ -67,6 +99,18 @@ async def chat_stream(
     async def event_generator() -> AsyncGenerator[str, None]:
         docs = []
         sources = []
+
+        # 情绪极端/愤怒 → 直接安抚 + 转人工，跳过检索与生成
+        if emotion_escalate:
+            yield f"data: {json.dumps({'event': 'status', 'data': '正在为您转接人工客服...'})}\n\n"
+            from src.conversation import get_human_handler
+
+            template = get_human_handler().get_human_response_template("high_emotion")
+            for token in template:
+                yield f"data: {json.dumps({'event': 'token', 'data': token})}\n\n"
+            yield f"data: {json.dumps({'event': 'emotion', 'data': emotion})}\n\n"
+            yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
+            return
 
         # 检索阶段（用 asyncio.to_thread 包装同步阻塞调用，避免阻塞事件循环）
         if need_retrieval and route_result.target in (
@@ -79,9 +123,11 @@ async def chat_stream(
             strategy = get_degradation_strategy(retriever)
 
             # 关键修复: 用 asyncio.to_thread 包装同步阻塞的检索调用
+            # 双路召回: 原始问题（保真度） + 改写/指代消解后问题（专业术语）并行合并
             degradation_result = await asyncio.to_thread(
                 strategy.search_with_degradation,
-                query=route_result.rewritten_query,
+                query=route_result.query,
+                secondary_query=retrieval_query,
                 top_k=top_k,
                 use_rerank=use_reranker,
             )
@@ -120,6 +166,11 @@ async def chat_stream(
                             role="assistant", content=full_response, sources=sources
                         ),
                     )
+                    # 三层记忆: 记录本轮（抽实体 + 更新滚动摘要）
+                    try:
+                        get_session_memory(session_id).record_turn(query, full_response)
+                    except Exception:
+                        logger.warning("记录会话记忆失败: %s", session_id)
                     yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
                 elif event.event == "error":
                     yield f"data: {json.dumps({'event': 'error', 'data': event.data})}\n\n"

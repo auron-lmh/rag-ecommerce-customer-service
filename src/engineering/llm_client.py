@@ -280,7 +280,41 @@ class LLMClient:
         tools: Optional[list] = None,
         tool_choice: Optional[dict] = None,
     ) -> str:
-        """带重试的同步调用"""
+        """带重试的同步调用（含熔断器保护）
+
+        熔断器在外层：连续失败 N 次 → 直接拒绝，不再重试等超时。
+        重试在内层：单次失败 → 指数退避重试。
+        """
+        from src.engineering.circuit_breaker import CircuitOpenError, get_llm_breaker
+
+        breaker = get_llm_breaker()
+
+        try:
+            return breaker.call(
+                self._retry_loop,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        except CircuitOpenError as e:
+            logger.error("LLM 熔断器打开，快速失败: %s", e)
+            raise LLMClientError(
+                f"LLM 服务暂时不可用（熔断保护中，{breaker.stats()['cooldown_remaining_s']:.0f}s 后恢复）"
+            )
+
+    def _retry_loop(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        timeout: int,
+        tools: Optional[list] = None,
+        tool_choice: Optional[dict] = None,
+    ) -> str:
+        """内部重试循环（被熔断器 call() 包裹）"""
         last_error = None
 
         for attempt in range(self._max_retries + 1):

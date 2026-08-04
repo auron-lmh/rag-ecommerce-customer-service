@@ -44,12 +44,19 @@ class CacheBackend(ABC):
         """清空缓存"""
 
     @abstractmethod
+    def clear_by_prefix(self, prefix: str) -> int:
+        """按 key 前缀删除缓存（返回删除条数）
+
+        用于知识更新后定向失效（如清空 query 层缓存），避免全量清空。
+        """
+
+    @abstractmethod
     def stats(self) -> dict:
         """缓存统计"""
 
 
 class MemoryCache(CacheBackend):
-    """内存缓存 — 开发/测试用
+    """内存缓存 — 开发/测试用（线程安全）
 
     使用方式:
         cache = MemoryCache(max_size=1000)
@@ -62,48 +69,62 @@ class MemoryCache(CacheBackend):
         self._max_size = max_size
         self._hits = 0
         self._misses = 0
+        self._lock = __import__("threading").Lock()
 
     def get(self, key: str) -> Optional[Any]:
-        if key in self._store:
-            value, expire_at = self._store[key]
-            if time.time() < expire_at:
-                self._hits += 1
-                return value
-            else:
-                del self._store[key]
-        self._misses += 1
-        return None
+        with self._lock:
+            if key in self._store:
+                value, expire_at = self._store[key]
+                if time.time() < expire_at:
+                    self._hits += 1
+                    return value
+                else:
+                    del self._store[key]
+            self._misses += 1
+            return None
 
     def set(self, key: str, value: Any, ttl: int = 3600) -> None:
-        # LRU 淘汰
-        if len(self._store) >= self._max_size:
-            self._evict()
-        self._store[key] = (value, time.time() + ttl)
+        with self._lock:
+            # LRU 淘汰
+            if len(self._store) >= self._max_size:
+                self._evict()
+            self._store[key] = (value, time.time() + ttl)
 
     def delete(self, key: str) -> None:
-        self._store.pop(key, None)
+        with self._lock:
+            self._store.pop(key, None)
 
     def exists(self, key: str) -> bool:
-        return self.get(key) is not None
+        return self.get(key) is not None  # get() 内部已有锁
 
     def clear(self) -> None:
-        self._store.clear()
-        self._hits = 0
-        self._misses = 0
+        with self._lock:
+            self._store.clear()
+            self._hits = 0
+            self._misses = 0
+
+    def clear_by_prefix(self, prefix: str) -> int:
+        """按 key 前缀删除缓存（返回删除条数）"""
+        with self._lock:
+            keys = [k for k in self._store if k.startswith(prefix)]
+            for k in keys:
+                del self._store[k]
+            return len(keys)
 
     def stats(self) -> dict:
-        total = self._hits + self._misses
-        return {
-            "backend": "memory",
-            "size": len(self._store),
-            "max_size": self._max_size,
-            "hits": self._hits,
-            "misses": self._misses,
-            "hit_rate": self._hits / total if total > 0 else 0,
-        }
+        with self._lock:
+            total = self._hits + self._misses
+            return {
+                "backend": "memory",
+                "size": len(self._store),
+                "max_size": self._max_size,
+                "hits": self._hits,
+                "misses": self._misses,
+                "hit_rate": self._hits / total if total > 0 else 0,
+            }
 
     def _evict(self) -> None:
-        """淘汰过期和最旧的缓存"""
+        """淘汰过期和最旧的缓存（调用方需持有 self._lock）"""
         now = time.time()
         # 先淘汰过期的
         expired = [k for k, (_, exp) in self._store.items() if now >= exp]
@@ -211,6 +232,19 @@ class RedisCache(CacheBackend):
         except Exception as e:
             logger.warning("Redis clear 失败: %s", e)
 
+    def clear_by_prefix(self, prefix: str) -> int:
+        """按 key 前缀删除缓存（返回删除条数）"""
+        if not self._client:
+            return self._fallback.clear_by_prefix(prefix)
+        try:
+            keys = self._client.keys(f"{self._prefix}{prefix}*")
+            if keys:
+                self._client.delete(*keys)
+            return len(keys)
+        except Exception as e:
+            logger.warning("Redis clear_by_prefix(%s) 失败: %s", prefix, e)
+            return 0
+
     def stats(self) -> dict:
         total = self._hits + self._misses
         base = {
@@ -306,6 +340,17 @@ class CacheManager:
     def _llm_key(self, prompt: str) -> str:
         """生成 LLM 响应缓存 key"""
         return f"llm:{hashlib.md5(prompt.encode()).hexdigest()}"
+
+    def clear_query_cache(self) -> int:
+        """定向失效检索缓存（第1层）——知识更新后调用
+
+        核心: 缓存失效必须绑定源数据变更事件（行业实践）。
+        新政策/文档入库成功后调用，清空所有 query 缓存，
+        避免缓存 TTL 内用户仍拿到旧政策答案。
+        只清 query 层，保留 embedding / LLM 缓存（LLM 缓存 key 含 context，
+        文档变化后 prompt 变化 → 天然失效，无需清理）。
+        """
+        return self._backend.clear_by_prefix("query:")
 
     # ── 统计 ──
 

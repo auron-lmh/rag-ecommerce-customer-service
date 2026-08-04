@@ -251,16 +251,17 @@ class SelfCorrector:
             pass
 
         client = get_llm_client()
+        fallback_msg = "抱歉，生成回答时出现错误，请稍后重试。"
         result = client.chat_with_fallback(
             messages=[{"role": "user", "content": prompt}],
-            fallback_value="抱歉，生成回答时出现错误，请稍后重试。",
+            fallback_value=fallback_msg,
             temperature=0.3,
             max_tokens=1024,
             timeout=30,
         )
 
-        # 存入缓存
-        if result:
+        # 存入缓存（修复: 不缓存降级错误文案，避免后续同 query 一直返回错误）
+        if result and result != fallback_msg:
             try:
                 cache.set_llm_response(prompt, result, ttl=3600)
             except Exception:

@@ -11,6 +11,8 @@
 import logging
 from typing import Optional
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 # Embedding 相关性阈值
@@ -308,3 +310,112 @@ def calculate_latency_score(latency_ms: float, threshold_ms: float = 1000) -> fl
     if latency_ms >= threshold_ms * 3:
         return 0.0
     return max(0.0, 1.0 - latency_ms / (threshold_ms * 3))
+
+
+# ═══════════════════════════════════════
+# Precision@K — 对标 enterprise-rag-stack eval_runner.py
+# ═══════════════════════════════════════
+
+
+def calculate_precision(
+    retrieved_docs: list[str], ground_truth: str, k: int = 5
+) -> float:
+    """Precision@K — 检索结果中有多少是相关的
+
+    用 Embedding 语义相似度判断相关性（与 Recall 保持一致）。
+
+    Args:
+        retrieved_docs: 检索到的文档文本列表
+        ground_truth: 标准答案/主题
+        k: 取前 K 个结果
+
+    Returns:
+        精度 (0~1)，相关文档数 / K
+    """
+    if not retrieved_docs or not ground_truth:
+        return 0.0
+
+    top_k = retrieved_docs[:k]
+    gt_vec = _embed_text(ground_truth)
+    if gt_vec is not None:
+        relevant = 0
+        for doc in top_k:
+            doc_vec = _embed_text(doc)
+            if doc_vec is None:
+                continue
+            sim = _cosine_sim(gt_vec, doc_vec)
+            if sim >= RELEVANCE_THRESHOLD:
+                relevant += 1
+        return relevant / len(top_k) if top_k else 0.0
+
+    # 降级: 子串匹配
+    logger.debug("Embedder 不可用，Precision 降级为子串匹配")
+    ground_truth_lower = ground_truth.lower()
+    relevant = sum(1 for doc in top_k if ground_truth_lower in doc.lower())
+    return relevant / len(top_k) if top_k else 0.0
+
+
+# ═══════════════════════════════════════
+# NDCG@K — 对标 enterprise-rag-stack eval_runner.py
+# ═══════════════════════════════════════
+
+
+def calculate_ndcg(retrieved_docs: list[str], ground_truth: str, k: int = 5) -> float:
+    """NDCG@K — Normalized Discounted Cumulative Gain
+
+    考虑排序位置的检索质量指标。相关文档排越前面分数越高。
+
+    DCG = Σ(rel_i / log2(i+2))
+    IDCG = 理想排序下的 DCG
+    NDCG = DCG / IDCG
+
+    Args:
+        retrieved_docs: 检索到的文档文本列表
+        ground_truth: 标准答案/主题
+        k: 取前 K 个结果
+
+    Returns:
+        NDCG 分数 (0~1)
+    """
+    if not retrieved_docs or not ground_truth:
+        return 0.0
+
+    top_k = retrieved_docs[:k]
+    gt_vec = _embed_text(ground_truth)
+
+    # 计算每条文档的相关性分数
+    if gt_vec is not None:
+        relevance_scores = []
+        for doc in top_k:
+            doc_vec = _embed_text(doc)
+            if doc_vec is None:
+                relevance_scores.append(0.0)
+                continue
+            sim = _cosine_sim(gt_vec, doc_vec)
+            # 二值化: >= 阈值视为相关(score=1)，否则不相关(score=0)
+            relevance_scores.append(1.0 if sim >= RELEVANCE_THRESHOLD else 0.0)
+    else:
+        # 降级: 子串匹配
+        logger.debug("Embedder 不可用，NDCG 降级为子串匹配")
+        ground_truth_lower = ground_truth.lower()
+        relevance_scores = [
+            1.0 if ground_truth_lower in doc.lower() else 0.0 for doc in top_k
+        ]
+
+    # DCG
+    dcg = 0.0
+    for i, rel in enumerate(relevance_scores):
+        if rel > 0:
+            dcg += rel / np.log2(i + 2)
+
+    # IDCG (理想排序: 所有相关文档排在最前面)
+    ideal_scores = sorted(relevance_scores, reverse=True)
+    idcg = 0.0
+    for i, rel in enumerate(ideal_scores):
+        if rel > 0:
+            idcg += rel / np.log2(i + 2)
+
+    if idcg == 0:
+        return 0.0
+
+    return dcg / idcg

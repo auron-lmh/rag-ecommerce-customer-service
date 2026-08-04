@@ -184,10 +184,20 @@ def _parse_excel(doc: RawDocument, t0: float, result: ParseResult) -> ParseResul
         markdown_lines.append(f"## {sheet_name}")
         markdown_lines.append("")
 
-        # 取前500行（避免超大Excel）
-        rows = list(ws.iter_rows(max_row=min(ws.max_row, 500), values_only=True))
+        # 修复: 500 行静默截断会丢数据（商品价目表/SKU 常超 500 行）。
+        # 提高到 5000 行，超限时打 warning 而不是静默丢弃。
+        MAX_EXCEL_ROWS = 5000
+        total_rows = ws.max_row
+        rows = list(
+            ws.iter_rows(max_row=min(total_rows, MAX_EXCEL_ROWS), values_only=True)
+        )
         if not rows:
             continue
+        if total_rows > MAX_EXCEL_ROWS:
+            result.warnings.append(
+                f"Sheet「{sheet_name}」共 {total_rows} 行，超过上限 {MAX_EXCEL_ROWS}，"
+                f"已截断到前 {MAX_EXCEL_ROWS} 行（建议拆分文件）"
+            )
 
         # 构建Markdown表格
         header = [str(c) if c is not None else "" for c in rows[0]]

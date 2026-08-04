@@ -38,7 +38,9 @@ PRICING = {
     "deepseek-chat": {"input": 0.001, "output": 0.002},
     "qwen-plus": {"input": 0.004, "output": 0.012},
     "qwen3.7-plus": {"input": 0.004, "output": 0.012},
+    "qwen3.7-plus-2026-05-26": {"input": 0.004, "output": 0.012},
     "qwen3-vl-embedding": {"input": 0.001, "output": 0},
+    "qwen2.5-vl-embedding": {"input": 0.001, "output": 0},
     "qwen3-vl-rerank": {"input": 0.001, "output": 0},
 }
 

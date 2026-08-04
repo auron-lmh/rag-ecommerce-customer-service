@@ -28,6 +28,8 @@ from .metrics import (
     calculate_keyword_coverage,
     calculate_latency_score,
     calculate_mrr,
+    calculate_ndcg,
+    calculate_precision,
     calculate_recall,
 )
 
@@ -35,6 +37,29 @@ logger = logging.getLogger(__name__)
 
 # 评测数据集路径
 EVAL_DATASET_PATH = settings.data_dir / "eval_dataset.json"
+
+
+def _percentile(sorted_values: list[float], p: int) -> float:
+    """计算百分位数
+
+    Args:
+        sorted_values: 已排序的值列表
+        p: 百分位 (0-100)
+
+    Returns:
+        百分位数值
+    """
+    n = len(sorted_values)
+    if n == 0:
+        return 0.0
+    if n == 1:
+        return sorted_values[0]
+    k = (p / 100.0) * (n - 1)
+    f = int(k)
+    c = k - f
+    if f + 1 < n:
+        return sorted_values[f] + c * (sorted_values[f + 1] - sorted_values[f])
+    return sorted_values[f]
 
 
 @dataclass
@@ -63,6 +88,9 @@ class EvalResult:
     correction_rounds: int
     answer: str = ""
     retrieved_docs: list[str] = field(default_factory=list)
+    # 修复: NDCG/Precision 之前没存到结果里，汇总恒为 0
+    precision_at_5: float = 0.0
+    ndcg_at_5: float = 0.0
 
 
 class RetrievalEvaluator:
@@ -113,6 +141,10 @@ class RetrievalEvaluator:
             retrieved_docs, test_case.ground_truth_answer, k=5
         )
         mrr = calculate_mrr(retrieved_docs, test_case.ground_truth_answer)
+        precision_at_5 = calculate_precision(
+            retrieved_docs, test_case.ground_truth_answer, k=5
+        )
+        ndcg_at_5 = calculate_ndcg(retrieved_docs, test_case.ground_truth_answer, k=5)
         faithfulness = calculate_faithfulness(
             test_case.ground_truth_answer,
             retrieved_docs,
@@ -136,6 +168,8 @@ class RetrievalEvaluator:
             correction_rounds=0,
             answer=test_case.ground_truth_answer,
             retrieved_docs=retrieved_docs[:3],
+            precision_at_5=precision_at_5,
+            ndcg_at_5=ndcg_at_5,
         )
 
     def evaluate_query_with_generation(
@@ -154,6 +188,15 @@ class RetrievalEvaluator:
         """
         t0 = time.time()
 
+        # 修复: 先单独检索拿文档文本（算 recall/mrr 用）
+        # 之前误用 result.sources（文件名 list[str]）→ 'str' object has no attribute 'text'
+        search_response = self.retriever.search(
+            query=test_case.question,
+            top_k=5,
+            use_rerank=True,
+        )
+        retrieved_docs = [r.text for r in search_response.results]
+
         # 使用 SelfCorrector 运行完整 RAG 流程
         from src.generation import get_corrector
 
@@ -167,15 +210,16 @@ class RetrievalEvaluator:
         latency_ms = (time.time() - t0) * 1000
 
         generated_answer = result.answer
-        retrieved_docs = (
-            [r.text for r in result.sources] if hasattr(result, "sources") else []
-        )
 
         # 计算指标（使用实际生成的回答）
         recall_at_5 = calculate_recall(
             retrieved_docs, test_case.ground_truth_answer, k=5
         )
         mrr = calculate_mrr(retrieved_docs, test_case.ground_truth_answer)
+        precision_at_5 = calculate_precision(
+            retrieved_docs, test_case.ground_truth_answer, k=5
+        )
+        ndcg_at_5 = calculate_ndcg(retrieved_docs, test_case.ground_truth_answer, k=5)
 
         # 关键: 用实际生成的回答评估忠实度，而非标准答案
         faithfulness = calculate_faithfulness(
@@ -201,6 +245,8 @@ class RetrievalEvaluator:
             correction_rounds=result.correction_rounds,
             answer=generated_answer,
             retrieved_docs=retrieved_docs[:3],
+            precision_at_5=precision_at_5,
+            ndcg_at_5=ndcg_at_5,
         )
 
     def evaluate_dataset(
@@ -241,24 +287,49 @@ class RetrievalEvaluator:
 
         avg_recall = sum(r.recall_at_5 for r in results) / total
         avg_mrr = sum(r.mrr for r in results) / total
+        avg_precision = sum(r.precision_at_5 for r in results) / total
+        avg_ndcg = sum(r.ndcg_at_5 for r in results) / total
         avg_faithfulness = sum(r.faithfulness for r in results) / total
         avg_keyword_coverage = sum(r.keyword_coverage for r in results) / total
         avg_latency = sum(r.latency_ms for r in results) / total
         avg_latency_score = sum(r.latency_score for r in results) / total
 
+        # P 分位数延迟
+        latencies = sorted(r.latency_ms for r in results)
+        p50 = _percentile(latencies, 50)
+        p95 = _percentile(latencies, 95)
+        p99 = _percentile(latencies, 99)
+
+        # 生成侧信号（修复: 之前算了但从不输出）
+        hallucination_rate = sum(r.hallucination_detected for r in results) / total
+        avg_correction_rounds = sum(r.correction_rounds for r in results) / total
+
         return {
             "total_cases": total,
             "recall@5": round(avg_recall, 4),
+            "precision@5": round(avg_precision, 4),
             "mrr": round(avg_mrr, 4),
+            "ndcg@5": round(avg_ndcg, 4),
             "faithfulness": round(avg_faithfulness, 4),
             "keyword_coverage": round(avg_keyword_coverage, 4),
+            "hallucination_rate": round(hallucination_rate, 4),
+            "avg_correction_rounds": round(avg_correction_rounds, 4),
             "avg_latency_ms": round(avg_latency, 1),
+            "p50_latency_ms": round(p50, 1),
+            "p95_latency_ms": round(p95, 1),
+            "p99_latency_ms": round(p99, 1),
             "latency_score": round(avg_latency_score, 4),
             "details": [
                 {
                     "question": r.question,
                     "recall@5": r.recall_at_5,
+                    "precision@5": r.precision_at_5,
                     "mrr": r.mrr,
+                    "ndcg@5": r.ndcg_at_5,
+                    "faithfulness": round(r.faithfulness, 4),
+                    "keyword_coverage": round(r.keyword_coverage, 4),
+                    "hallucination_detected": r.hallucination_detected,
+                    "correction_rounds": r.correction_rounds,
                     "latency_ms": round(r.latency_ms, 1),
                 }
                 for r in results

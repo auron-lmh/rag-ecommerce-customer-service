@@ -14,7 +14,7 @@ from src.config import settings
 
 from .embedder import Embedder, get_embedder
 from .milvus_store import MilvusStore
-from .models import SearchResponse
+from .models import SearchResponse, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,89 @@ def _get_cache():
     from src.engineering import get_cache
 
     return get_cache()
+
+
+def _search_response_to_dict(response: SearchResponse) -> dict:
+    """SearchResponse → dict（Redis 缓存需 JSON 序列化）
+
+    修复: SearchResponse 是 dataclass 不可 json.dumps，生产 Redis 缓存会失败。
+    """
+    return {
+        "query": response.query,
+        "results": [
+            {
+                "chunk_id": r.chunk_id,
+                "text": r.text,
+                "score": r.score,
+                "doc_type": r.doc_type,
+                "source_file": r.source_file,
+                "page_number": r.page_number,
+                "heading_path": r.heading_path,
+                "metadata": r.metadata,
+            }
+            for r in response.results
+        ],
+        "total_found": response.total_found,
+        "elapsed_ms": response.elapsed_ms,
+        "threshold": response.threshold,
+    }
+
+
+def _dict_to_search_response(data: dict) -> SearchResponse:
+    """dict → SearchResponse（缓存反序列化）"""
+    return SearchResponse(
+        query=data.get("query", ""),
+        results=[SearchResult(**r) for r in data.get("results", [])],
+        total_found=data.get("total_found", 0),
+        elapsed_ms=data.get("elapsed_ms", 0),
+        threshold=data.get("threshold", 0),
+    )
+
+
+def _merge_results(results_a: list, results_b: list) -> list:
+    """双路召回合并去重 — 按 chunk_id 保留最高分，按分数降序
+
+    作用: 原始问题（保真度）+ 改写后问题（专业术语）两路召回合并，
+    同一文档只保留相似度最高的一条，避免重复/低质量文档淹没高质量结果。
+    """
+    best: dict[str, SearchResult] = {}
+    for r in results_a + results_b:
+        if r.chunk_id not in best or r.score > best[r.chunk_id].score:
+            best[r.chunk_id] = r
+    return sorted(best.values(), key=lambda r: r.score, reverse=True)
+
+
+def _filter_by_effectiveness(results: list, today: str | None = None) -> list:
+    """过滤已过期/未生效的文档（政策时效元数据，改进4）
+
+    chunk metadata 中的 effective_from / effective_to（ISO 日期字符串）
+    决定文档生效窗口:
+      - effective_from 存在且 > today → 尚未生效，过滤
+      - effective_to   存在且 < today → 已过期，过滤
+      - 未设置（默认）                → 永不过期，保留
+
+    背景: 电商政策频繁变（大促/618/双11），历史政策必须被过滤，
+    否则用户问"最新优惠"会返回已结束活动。
+    （注: 检索缓存 TTL 内可能出现 ≤1h 时效滞后；生产可改为 Milvus 标量字段过滤）
+    """
+    if not results:
+        return results
+    if today is None:
+        from datetime import date
+
+        today = date.today().isoformat()
+
+    valid = []
+    for r in results:
+        meta = r.metadata or {}
+        eff_from = meta.get("effective_from") or ""
+        eff_to = meta.get("effective_to") or ""
+        if eff_from and eff_from > today:
+            continue  # 尚未生效
+        if eff_to and eff_to < today:
+            continue  # 已过期
+        valid.append(r)
+    return valid
 
 
 class Retriever:
@@ -89,7 +172,7 @@ class Retriever:
         cached = cache.get_query_result(cache_key)
         if cached:
             logger.debug("缓存命中: %s", query[:50])
-            return cached
+            return _dict_to_search_response(cached)
 
         # ── 构建过滤表达式 ──
         filter_parts = []
@@ -128,6 +211,15 @@ class Retriever:
 
         response.query = query
 
+        # 改进4: 政策时效过滤——剔除已过期/未生效文档（在重排序前，让 rerank 只处理有效文档）
+        filtered_results = _filter_by_effectiveness(response.results)
+        if len(filtered_results) != len(response.results):
+            logger.debug(
+                "时效过滤: %d → %d 条", len(response.results), len(filtered_results)
+            )
+            response.results = filtered_results
+            response.total_found = len(filtered_results)
+
         # ── 重排序 ──
         if use_rerank and self.reranker and response.results:
             try:
@@ -148,8 +240,75 @@ class Retriever:
                     threshold=response.threshold,
                 )
 
-        # ── 缓存结果 ──
-        cache.set_query_result(cache_key, response, ttl=3600)
+        # ── 缓存结果（存 dict，Redis 可 JSON 序列化）──
+        cache.set_query_result(cache_key, _search_response_to_dict(response), ttl=3600)
+
+        return response
+
+    def search_dual_path(
+        self,
+        query: str,
+        secondary_query: str,
+        top_k: int = 5,
+        use_rerank: bool = True,
+        threshold: Optional[float] = None,
+    ) -> SearchResponse:
+        """双路召回 + 合并去重（两步检索）
+
+        原始问题（保真度）+ 改写后问题（专业术语）分别召回，合并去重后精排。
+        行业实践（两步检索）: 召回率提升约 30%，且改写偏离时原始问题兜底，
+        消除"改写错就全错"风险。
+
+        Args:
+            query: 原始问题（保真兜底）
+            secondary_query: 改写后问题（专业术语/指代消解）
+            top_k: 最终返回数
+            use_rerank: 是否 Reranker 精排
+            threshold: 最低相似度阈值
+
+        Returns:
+            SearchResponse（合并去重后的结果）
+        """
+        if not secondary_query or secondary_query == query:
+            return self.search(
+                query=query,
+                top_k=top_k,
+                use_rerank=use_rerank,
+                threshold=threshold,
+            )
+
+        # 召回阶段取更多候选（供合并 + 精排筛选）
+        recall_k = max(top_k, settings.retrieval_dense_top_k) if use_rerank else top_k
+
+        r1 = self.search(query, top_k=recall_k, use_rerank=False, threshold=threshold)
+        r2 = self.search(
+            secondary_query, top_k=recall_k, use_rerank=False, threshold=threshold
+        )
+
+        merged = _merge_results(r1.results, r2.results)
+        response = SearchResponse(
+            query=query,
+            results=merged,
+            total_found=len(merged),
+            elapsed_ms=round(r1.elapsed_ms + r2.elapsed_ms, 1),
+            threshold=r1.threshold,
+        )
+
+        # 精排（跨编码器对合并结果重排，优于单路）
+        if use_rerank and self.reranker and response.results:
+            try:
+                response = self.reranker.rerank_search_response(
+                    query=query,
+                    search_response=response,
+                    top_n=top_k,
+                )
+            except Exception as e:
+                logger.warning("双路召回精排失败，降级用合并结果: %s", e)
+                response.results = response.results[:top_k]
+                response.total_found = len(response.results)
+        else:
+            response.results = response.results[:top_k]
+            response.total_found = len(response.results)
 
         return response
 

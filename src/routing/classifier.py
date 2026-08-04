@@ -29,7 +29,7 @@ INTENT_TOOL = {
                     "description": (
                         "用户意图类别:\n"
                         "- return_refund: 退货、退款、换货、售后\n"
-                        "- product_consult: 商品参数、规格、使用方法、推荐\n"
+                        "- product_consult: 商品参数、规格、使用方法、推荐、优惠券/红包/满减规则\n"
                         "- logistics: 快递、配送、运费、发货时间\n"
                         "- order_query: 订单状态、支付、发票、订单修改\n"
                         "- complaint: 投诉、不满、建议、表扬\n"
@@ -84,7 +84,10 @@ SYSTEM_PROMPT = """你是一个电商客服意图分类器。
 注意:
 - 如果用户同时提到多个意图，选最核心的那个
 - 如果不确定，选 confidence 最低的那个
-- 提取所有可识别的实体（订单号、商品名、快递单号等）"""
+- 提取所有可识别的实体（订单号、商品名、快递单号等）
+- **优惠券/红包/满减/折扣相关 → product_consult**（不是 chitchat）
+- **指代/追问**（如"上次那个券""那运费谁出""它支持吗"）→ 结合前文归为对应意图
+  （product_consult / return_refund / order_query），**不要判为 chitchat**"""
 
 
 class IntentClassifier:
@@ -207,6 +210,25 @@ class IntentClassifier:
                 intent=Intent.PRODUCT_CONSULT,
                 confidence=0.6,
                 reasoning="关键词匹配: 商品咨询相关",
+            )
+
+        # 优惠券/红包/满减/折扣 → 商品服务咨询（不是 chitchat）
+        if any(kw in text for kw in ["券", "优惠", "红包", "满减", "折扣", "积分"]):
+            return IntentResult(
+                intent=Intent.PRODUCT_CONSULT,
+                confidence=0.6,
+                reasoning="关键词匹配: 优惠/券类，走知识库检索",
+            )
+
+        # 指代词/追问 → 走 RAG（让记忆/检索生效，不判 chitchat）
+        if any(
+            kw in text
+            for kw in ["那个", "这个", "它", "上次", "之前", "刚才", "还有", "那"]
+        ):
+            return IntentResult(
+                intent=Intent.PRODUCT_CONSULT,
+                confidence=0.5,
+                reasoning="指代词/追问，走知识库检索",
             )
 
         # 默认闲聊

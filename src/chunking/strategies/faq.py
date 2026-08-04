@@ -90,20 +90,32 @@ class FAQSplitter:
         return chunks
 
     def _extract_question(self, text: str) -> str:
-        """从 Q&A 对中提取 Q 部分"""
-        # 匹配 Markdown 标题形式的 Q
-        m = re.search(r"^#{2,6}\s*Q?\d*[：:\s]*(.+?)$", text, re.MULTILINE)
-        if m:
-            return m.group(1)
+        """从 Q&A 对中提取 Q 部分
 
-        # 匹配 Q1: / 问： 形式
-        m = re.search(r"^(?:Q\d*|[问问])[\.\、\s：:]+\s*(.+?)$", text, re.MULTILINE)
-        if m:
-            return m.group(1)
+        修复: 跳过 "## 第N页" 伪标题（PDF 分页标记），避免把页码误当问题。
+        """
+        for line in text.split("\n"):
+            stripped = line.strip()
+            # 跳过页码伪标题
+            if re.match(r"^#{1,6}\s*第\s*\d+\s*页\s*$", stripped):
+                continue
+            # 匹配 Markdown 标题形式的 Q
+            m = re.match(r"^#{2,6}\s*Q?\d*[：:\s]*(.+?)$", stripped)
+            if m:
+                return m.group(1)
+            # 匹配 Q1: / 问： 形式
+            m = re.match(r"^(?:Q\d*|[问问])[\.\、\s：:]+\s*(.+?)$", stripped)
+            if m:
+                return m.group(1)
 
-        # 取首行
-        first_line = text.split("\n")[0].strip()
-        return first_line[:100] if first_line else ""
+        # 取首行（跳过页码伪标题）
+        for line in text.split("\n"):
+            stripped = line.strip()
+            if re.match(r"^#{1,6}\s*第\s*\d+\s*页\s*$", stripped):
+                continue
+            if stripped:
+                return stripped[:100]
+        return ""
 
     def _split_long_answer(self, text: str, q_text: str) -> list[str]:
         """切分超长 A，每个子块前缀附上 Q"""

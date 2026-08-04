@@ -37,3 +37,8 @@ scripts/test_ocr_models.py
 # OS files
 .DS_Store
 Thumbs.db
+
+# Diagnostic/deployment one-off scripts
+scripts/diag_embed.py
+scripts/diag_search.py
+scripts/drop_collection.py

@@ -53,6 +53,7 @@ class Chunk:
     section_title: Optional[str] = None
 
     strategy: ChunkStrategy = ChunkStrategy.RECURSIVE
+    target_size: int = 0  # 切分目标尺寸（记录配置，用于检测"切分策略变更"）
 
     overlap_with_prev: bool = False
     overlap_content: str = ""

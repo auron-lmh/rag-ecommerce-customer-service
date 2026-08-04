@@ -12,6 +12,7 @@
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -26,6 +27,32 @@ logger = logging.getLogger(__name__)
 SIMILARITY_THRESHOLD = 0.7  # Level 1 最低相似度阈值
 IMPROVEMENT_THRESHOLD = 0.05  # Level 2 改善幅度阈值
 MAX_REWRITE_ATTEMPTS = 2  # 最大改写尝试次数
+
+# 复杂查询判定（主动拆分子问题并行检索）
+_STRONG_COMPLEX_MARKERS = [
+    "对比",
+    "比较",
+    "哪个好",
+    "哪个更好",
+    "有什么区别",
+    "分别",
+    "以及",
+]
+_WEAK_COMPLEX_MARKERS = ["和", "与", "同时"]
+
+
+def _is_complex_query(query: str) -> bool:
+    """判断是否为复杂/复合查询（需要拆分子问题并行检索）
+
+    强标记（对比/区别/分别/以及）命中即复杂；
+    弱标记（和/与/同时）需 ≥2 个，避免"和运费"类误判。
+    例: "A和B的性能参数对比" → 复杂；"怎么退货" → 不复杂。
+    """
+    if not query:
+        return False
+    strong = sum(1 for m in _STRONG_COMPLEX_MARKERS if m in query)
+    weak = sum(1 for m in _WEAK_COMPLEX_MARKERS if m in query)
+    return strong >= 1 or weak >= 2
 
 
 @dataclass
@@ -59,24 +86,64 @@ class DegradationStrategy:
         top_k: int = 5,
         threshold: float = SIMILARITY_THRESHOLD,
         use_rerank: bool = True,
+        secondary_query: str | None = None,
     ) -> DegradationResult:
-        """带降级的检索
+        """带降级的检索（Level 1 支持双路召回）
 
         Args:
-            query: 用户查询
+            query: 用户查询（原始问题，保真兜底）
             top_k: 返回结果数
             threshold: 最低相似度阈值
             use_rerank: 是否启用 Reranker
+            secondary_query: 改写后问题（提供时 Level 1 走双路召回，
+                             原始+改写并行合并去重；不提供则退化为单路）
 
         Returns:
             DegradationResult
         """
-        # ── Level 1: 原始 query 检索 ──
-        response = self.retriever.search(
-            query=query,
-            top_k=top_k,
-            use_rerank=use_rerank,
-        )
+        # ── Level 0: 复杂查询主动拆分子问题并行检索（面试加分项）──
+        # 例: "A和B的性能参数对比" → 拆成 ["A性能", "A参数", "B性能", ...] 并行检索 → 合并
+        # 行业实践（Question Decomposition for RAG）: 单查询对复合问题会"夹在概念之间"，
+        # 拆分子查询并行检索 + 汇总，MRR@10 +36.7%。
+        if _is_complex_query(query):
+            decomposed = self._expand_and_search(query, top_k)
+            if decomposed.results and self._is_sufficient(decomposed, threshold):
+                if use_rerank and self.retriever.reranker:
+                    try:
+                        decomposed = self.retriever.reranker.rerank_search_response(
+                            query=query,
+                            search_response=decomposed,
+                            top_n=top_k,
+                        )
+                    except Exception as e:
+                        logger.warning("复杂查询精排失败，用合并结果: %s", e)
+                logger.info(
+                    "复杂查询主动分解命中: %s → %d 条",
+                    query[:40],
+                    len(decomposed.results),
+                )
+                return DegradationResult(
+                    response=decomposed,
+                    level=1,
+                    method="decomposed",
+                    original_query=query,
+                )
+            logger.info("复杂查询分解结果不足，继续双路召回")
+
+        # ── Level 1: 双路召回（原始 + 改写并行合并去重）──
+        if secondary_query and secondary_query != query:
+            response = self.retriever.search_dual_path(
+                query=query,
+                secondary_query=secondary_query,
+                top_k=top_k,
+                use_rerank=use_rerank,
+            )
+        else:
+            response = self.retriever.search(
+                query=query,
+                top_k=top_k,
+                use_rerank=use_rerank,
+            )
 
         if self._is_sufficient(response, threshold):
             logger.info(
@@ -236,7 +303,8 @@ class DegradationStrategy:
     def _expand_and_search(self, query: str, top_k: int) -> SearchResponse:
         """查询扩展 + 并行检索 + 合并结果
 
-        使用 Multi-Query 扩展，对每个子查询检索，合并去重后返回最佳结果。
+        使用 Multi-Query 扩展，对每个子查询**并发**检索（ThreadPool，网络I/O 并行），
+        合并去重后返回最佳结果。子问题上限由 QueryExpander 控制（3~5 个）。
         """
         from .query_expansion import get_query_expander
 
@@ -246,20 +314,25 @@ class DegradationStrategy:
         queries = expansion["queries"]
         hyde_doc = expansion.get("hyde_doc", "")
 
-        logger.info("查询扩展: %s → %d 个子查询", query[:50], len(queries))
+        logger.info("查询扩展: %s → %d 个子查询（并行）", query[:50], len(queries))
 
-        # 并行检索所有子查询
+        # 并行检索所有子查询（线程池，网络I/O 并发 → 响应更快）
         all_results = []
-        for q in queries:
-            try:
-                response = self.retriever.search(
+        with ThreadPoolExecutor(max_workers=min(len(queries), 4)) as pool:
+            futures = [
+                pool.submit(
+                    self.retriever.search,
                     query=q,
                     top_k=top_k,
-                    use_rerank=False,  # 扩展查询不重排序，最后统一排序
+                    use_rerank=False,  # 子查询不重排序，最后统一排序
                 )
-                all_results.extend(response.results)
-            except Exception as e:
-                logger.warning("扩展查询检索失败 [%s]: %s", q[:30], e)
+                for q in queries
+            ]
+            for future in futures:
+                try:
+                    all_results.extend(future.result().results)
+                except Exception as e:
+                    logger.warning("扩展查询检索失败: %s", e)
 
         # HyDE 文档检索
         if hyde_doc:
@@ -326,34 +399,34 @@ class DegradationStrategy:
     def _zhipu_web_search(self, query: str) -> list[dict]:
         """智谱联网搜索
 
-        使用智谱 GLM-4-Flash + 联网搜索插件
+        使用智谱 GLM-4-Flash + 联网搜索插件（统一使用 httpx 替代 requests）
         """
-        import requests
+        import httpx
 
         try:
-            resp = requests.post(
-                f"{settings.zhipu_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.zhipu_api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "glm-4-flash",
-                    "messages": [{"role": "user", "content": query}],
-                    "tools": [
-                        {
-                            "type": "web_search",
-                            "web_search": {
-                                "enable": True,
-                                "search_query": query,
-                            },
-                        }
-                    ],
-                },
-                timeout=20,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            with httpx.Client(timeout=20.0) as client:
+                resp = client.post(
+                    f"{settings.zhipu_base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {settings.zhipu_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": "glm-4-flash",
+                        "messages": [{"role": "user", "content": query}],
+                        "tools": [
+                            {
+                                "type": "web_search",
+                                "web_search": {
+                                    "enable": True,
+                                    "search_query": query,
+                                },
+                            }
+                        ],
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
             # 提取搜索结果
             results = []
@@ -394,22 +467,22 @@ class DegradationStrategy:
             return []
 
     def _tavily_web_search(self, query: str, api_key: str) -> list[dict]:
-        """Tavily Search API"""
-        import requests
+        """Tavily Search API（统一使用 httpx 替代 requests）"""
+        import httpx
 
         try:
-            resp = requests.post(
-                "https://api.tavily.com/search",
-                json={
-                    "api_key": api_key,
-                    "query": query,
-                    "search_depth": "basic",
-                    "max_results": 5,
-                },
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            with httpx.Client(timeout=15.0) as client:
+                resp = client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": api_key,
+                        "query": query,
+                        "search_depth": "basic",
+                        "max_results": 5,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
             results = data.get("results", [])
             logger.info("Tavily 联网搜索: %s, 返回 %d 条结果", query[:50], len(results))
             return [

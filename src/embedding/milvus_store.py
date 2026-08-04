@@ -302,6 +302,7 @@ class MilvusStore:
                         source_file=entity.get("source_file", ""),
                         page_number=chunk_metadata.get("page_number", 0),
                         heading_path=list(entity.get("heading_path", []) or []),
+                        metadata=chunk_metadata,  # 改进4: 带时效/版本元数据，供检索层过滤
                     )
                 )
         return SearchResponse(

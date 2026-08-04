@@ -22,7 +22,12 @@ async def query(
 
     流程: query → Embedder → Milvus Hybrid Search → (可选) Reranker → 返回
     """
-    response = retriever.search(
+    # 修复: 检索（含 embedding）放线程池执行，避免在 async 事件循环里跑同步
+    # dashscope 调用，规避 uvicorn 进程 embedding 不一致的异常连接路径
+    import asyncio
+
+    response = await asyncio.to_thread(
+        retriever.search,
         query=req.query,
         top_k=req.top_k,
         use_hybrid=req.use_hybrid,

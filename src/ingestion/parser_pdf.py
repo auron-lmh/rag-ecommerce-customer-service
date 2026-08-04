@@ -172,88 +172,141 @@ def _load_images_from_pdf(pdf_path: str, dpi: int = 200) -> list[Image.Image]:
     return images
 
 
+def _page_has_meaningful_images(doc, page_idx: int, min_size: int = 50) -> bool:
+    """检测页面是否含"有效"图片（非装饰性小图）
+
+    图文混排页（含截图/表格图/商品图）需要走 VLM OCR 同时提取文字+图片，
+    只取文本会丢失图片里的信息。
+    装饰性小图（图标/分隔线）过滤掉，避免误判为图文页浪费 OCR。
+    """
+    try:
+        for img in doc.get_page_images(page_idx):
+            xref = img[0]
+            pix = fitz.Pixmap(doc, xref)
+            w, h = pix.width, pix.height
+            if w >= min_size and h >= min_size:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 # ═══════════════════════════════════════
 # 核心: 与 ZhipuOCRParser 同款架构
 # ═══════════════════════════════════════
 
 
 def _parse_pdf(file_path: str, api_key: str):
-    """完整照搬 ZhipuOCRParser.parse_pdf 的架构
+    """PDF → 文本快路径 + 扫描页 OCR
 
-    与源码的区别: _inference_with_zhipu → _inference_with_qwen (API 换成千问)
+    修复 (P1):
+      - 纯文本页用 fitz.get_text() 零成本提取，只有扫描页才走 VLM OCR（省成本/速度）
+      - 强制 settings.pdf_max_pages 上限
+      - OCR 失败页剔除（不把错误串入库）
     """
-    # ── 步骤1: 渲染所有页面为 PIL Image (与 load_images_from_pdf 一致) ──
-    print(f"[PDF OCR] 正在加载 PDF: {file_path}")
-    images_origin = _load_images_from_pdf(file_path, dpi=PDF_DPI)
-    total_pages = len(images_origin)
-    print(f"[PDF OCR] 共 {total_pages} 页, {NUM_THREAD} 线程并发")
+    # ── 步骤1: 打开 PDF，逐页分类（文本页 vs 图文/扫描页）──
+    # 优化: 先分类，只渲染需要 OCR 的页（纯文本 PDF 不再渲染全部页）
+    print(f"[PDF] 正在加载 PDF: {file_path}")
+    text_map: dict[int, str] = {}
+    ocr_pages: list[int] = []
+    total_pages = 0
+    with fitz.open(file_path) as doc:
+        total_pages = doc.page_count
+        if total_pages == 0:
+            raise RuntimeError("PDF 页数为 0，文件可能为空或损坏")
 
-    if total_pages == 0:
-        raise RuntimeError("PDF 页数为 0，文件可能为空或损坏")
+        # 页数上限
+        max_pages = getattr(settings, "pdf_max_pages", 50) or 50
+        limit = min(total_pages, max_pages)
+        if total_pages > max_pages:
+            print(f"[PDF] 超过 {max_pages} 页，截断到前 {max_pages} 页")
 
-    # ── 步骤2: 构建任务列表 ──
-    jpg_dir = str(Path(file_path).parent / f"{Path(file_path).stem}_pages")
-    tasks = [
-        {"origin_image": img, "page_idx": i, "save_dir": jpg_dir}
-        for i, img in enumerate(images_origin)
-    ]
+        # 判断逻辑:
+        #   纯文本页(无有效图片 + 文本充足) → fitz 提取（零成本）
+        #   图文混排页(含有效图片) / 扫描页(文本不足) → VLM OCR（同时提取文字+图片）
+        for idx in range(limit):
+            t = doc[idx].get_text().strip()
+            has_img = _page_has_meaningful_images(doc, idx)
+            if len(t) >= 50 and not has_img:
+                text_map[idx] = t
+            else:
+                ocr_pages.append(idx)
 
-    def _execute_task(task_args: dict):
-        """与 ZhipuOCRParser._execute_task 一致 → 调用 _parse_single_image"""
-        return _parse_single_image(
-            origin_image=task_args["origin_image"],
-            page_idx=task_args["page_idx"],
-            api_key=api_key,
-            save_dir=task_args.get("save_dir"),
-        )
+        # 优化: 只渲染需要 OCR 的页
+        ocr_images: dict[int, Image.Image] = {
+            idx: _fitz_doc_to_image(doc[idx], target_dpi=PDF_DPI) for idx in ocr_pages
+        }
 
-    # ── 步骤3: ThreadPool.imap_unordered 并发 ──
-    results = []
-    with ThreadPool(NUM_THREAD) as pool:
-        # 用 iter+print 替代 tqdm (避免额外依赖)
-        iterator = pool.imap_unordered(_execute_task, tasks)
-        for i, result in enumerate(iterator):
-            results.append(result)
-            # 实时进度输出
-            progress = (i + 1) / total_pages * 100
-            print(f"\r[PDF OCR] 进度: {i + 1}/{total_pages} ({progress:.0f}%)", end="")
-            sys.stdout.flush()
-    print()  # 换行
+    print(f"[PDF] 文本页 {len(text_map)} 个, 图文/扫描页 {len(ocr_pages)} 个")
 
-    # ── 步骤4: 按页码排序合并 ──
-    results.sort(key=lambda x: x["page_no"])
+    # ── 步骤2: 只对图文/扫描页 OCR（复用 ThreadPool）──
+    ocr_results: dict[int, dict] = {}
+    if ocr_pages:
+        jpg_dir = str(Path(file_path).parent / f"{Path(file_path).stem}_pages")
+        tasks = [
+            {"origin_image": ocr_images[idx], "page_idx": idx, "save_dir": jpg_dir}
+            for idx in ocr_pages
+        ]
 
-    failed_count = sum(1 for r in results if r["text"].startswith("[OCR 失败"))
-    if failed_count == total_pages:
-        raise RuntimeError(
-            f"全部 {total_pages} 页 OCR 均失败。"
-            "请检查: 1) API Key 是否有效 2) API 额度是否耗尽 3) 网络是否可达"
-        )
+        def _execute_task(task_args: dict):
+            return _parse_single_image(
+                origin_image=task_args["origin_image"],
+                page_idx=task_args["page_idx"],
+                api_key=api_key,
+                save_dir=task_args.get("save_dir"),
+            )
 
-    # ── 保存每页原图 .jpg (与 RAG 项目 output 格式一致) ──
+        with ThreadPool(NUM_THREAD) as pool:
+            iterator = pool.imap_unordered(_execute_task, tasks)
+            for i, result in enumerate(iterator):
+                ocr_results[result["page_no"]] = result
+                print(f"\r[PDF OCR] 进度: {i + 1}/{len(ocr_pages)}", end="")
+                sys.stdout.flush()
+        print()
+
+    if not ocr_results and not text_map:
+        raise RuntimeError(f"PDF {total_pages} 页均无法提取内容")
+
+    # ── 步骤4: 按页码合并（剔除 OCR 失败页）──
     jpg_dir = Path(file_path).parent / f"{Path(file_path).stem}_pages"
-    jpg_dir.mkdir(parents=True, exist_ok=True)
-
+    failed_count = 0
     markdown_parts = []
-    for r in results:
-        page_num = r["page_no"] + 1
-        markdown_parts.append(f"## 第{page_num}页\n\n{r['text']}")
+    for idx in range(limit):
+        page_num = idx + 1
+        if idx in text_map:
+            markdown_parts.append(f"## 第{page_num}页\n\n{text_map[idx]}")
+            continue
 
+        r = ocr_results.get(idx)
+        if r is None or r["text"].startswith("[OCR 失败"):
+            failed_count += 1
+            continue  # 修复: 剔除 OCR 失败页
+
+        markdown_parts.append(f"## 第{page_num}页\n\n{r['text']}")
         # 保存页面原图
         if r.get("image"):
-            img_path = jpg_dir / f"page_{page_num}.jpg"
             try:
+                jpg_dir.mkdir(parents=True, exist_ok=True)
                 img: Image.Image = r["image"]
                 if img.mode != "RGB":
                     img = img.convert("RGB")
-                img.save(str(img_path), "JPEG", quality=85)
+                img.save(str(jpg_dir / f"page_{page_num}.jpg"), "JPEG", quality=85)
             except Exception:
                 pass
 
-    api_cost = 0.005 * total_pages
+    if failed_count == limit and limit > 0:
+        raise RuntimeError(
+            f"全部 {limit} 页解析均失败。"
+            "请检查: 1) API Key 是否有效 2) API 额度是否耗尽 3) 网络是否可达"
+        )
+
+    # 成本只算 OCR 页（文本页零成本）
+    api_cost = 0.005 * len(ocr_pages)
     markdown_text = "\n\n".join(markdown_parts)
-    print(f"[PDF OCR] 完成: {total_pages} 页, {len(markdown_text)} 字符")
-    return markdown_text, total_pages, api_cost
+    print(
+        f"[PDF] 完成: {len(markdown_text)} 字符, OCR {len(ocr_pages)} 页, 失败 {failed_count} 页"
+    )
+    return markdown_text, limit, api_cost
 
 
 def _parse_single_image(

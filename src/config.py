@@ -8,11 +8,12 @@ pydantic-settings 自动从以下来源加载（优先级从高到低）：
 因此字段默认值应设为空字符串或合理默认值，
 NOT os.getenv() —— 后者在类定义时求值，此时 .env 尚未加载。
 
-模型方案 (2026-07):
-  PDF 解析:   qwen3.7-plus (替代已下线的 qwen-vl-max)
-  Embedding:  qwen3-vl-embedding → 2048-dim (文本+图片同一向量空间)
+模型方案 (2026-08):
+  PDF 解析:   qwen3.7-plus-2026-05-26 (替代旧版 qwen3.7-plus)
+  OCR:        qwen-vl-ocr-2025-08-28 (替代旧版 qwen-vl-ocr-1028)
+  Embedding:  qwen2.5-vl-embedding → 2048-dim (支持 512~2048，文本+图片同一向量空间)
   全文检索:   BM25 + Dense (WeightedRanker)
-  Reranker:   qwen3-vl-rerank (可选)
+  Reranker:   qwen3-vl-rerank (可选，未变更)
 """
 
 from pathlib import Path
@@ -57,8 +58,8 @@ class Settings(BaseSettings):
     # ========== LLM 主/备模型 ==========
     default_model: str = "deepseek-chat"
     fallback_model: str = "qwen-plus"
-    vision_model: str = "qwen3.7-plus"  # 图片理解（替代已下线 glm-4v-flash）
-    ocr_model: str = "qwen-vl-ocr-1028"  # PDF OCR（替代已下线 qwen-vl-max）
+    vision_model: str = "qwen3.7-plus-2026-05-26"  # 图片理解
+    ocr_model: str = "qwen-vl-ocr-2025-08-28"  # PDF OCR
 
     # ========== 文档解析 ==========
     pdf_max_pages: int = 50  # PDF单次最大解析页数
@@ -66,8 +67,10 @@ class Settings(BaseSettings):
     doc_parse_timeout: int = 120  # 文档解析超时(秒)
 
     # ========== Embedding (DashScope 多模态) ==========
-    embedding_model: str = "qwen3-vl-embedding"
-    embedding_dim: int = 2048  # qwen3-vl-embedding 支持 256~2560
+    embedding_model: str = "qwen2.5-vl-embedding"
+    embedding_dim: int = (
+        2048  # qwen2.5-vl-embedding 支持 512~2048（保持2048兼容旧collection）
+    )
     embedding_rpm: int = 120  # DashScope Embedding API 限流 (RPM)
 
     # ========== Reranker (DashScope) ==========
@@ -79,9 +82,9 @@ class Settings(BaseSettings):
     milvus_host: str = "127.0.0.1"
     milvus_port: int = 19530
     milvus_user: str = "root"
-    milvus_password: str = "Milvus"
+    milvus_password: str = ""  # 默认清空，必须通过 .env 或环境变量设置
     milvus_collection: str = "ecommerce_knowledge"
-    milvus_dim: int = 2048  # qwen3-vl-embedding 输出维度
+    milvus_dim: int = 2048  # qwen2.5-vl-embedding 输出维度（保持2048）
 
     # ========== Redis ==========
     redis_host: str = "127.0.0.1"

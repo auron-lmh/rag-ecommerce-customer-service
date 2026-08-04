@@ -103,11 +103,41 @@ class HallucinationDetector:
         )
         return self._parse_result(data)
 
+    @staticmethod
+    def _normalize_verdict(verdict_str: str) -> str:
+        """容错: emoji/中文别名 → 标准 verdict"""
+        v = (verdict_str or "").strip().lower()
+        mapping = {
+            "✅": "supported",
+            "有依据": "supported",
+            "supported": "supported",
+            "yes": "supported",
+            "true": "supported",
+            "⚠️": "partially",
+            "部分有依据": "partially",
+            "partially": "partially",
+            "partial": "partially",
+            "部分": "partially",
+            "❌": "hallucination",
+            "无依据": "hallucination",
+            "hallucination": "hallucination",
+            "no": "hallucination",
+            "false": "hallucination",
+        }
+        return mapping.get(v, v)
+
     def _parse_result(self, data: dict) -> HallucinationCheck:
-        """解析 LLM 返回的 JSON"""
+        """解析 LLM 返回的 JSON — 从 claims 聚合，不信任 LLM 自报标量
+
+        修复 (P0): 之前直接取 LLM 自报 overall_faithfulness/has_hallucination，
+        模型自偏或均值化会掩盖个别幻觉断言。改为从 claim 级聚合:
+          faithfulness = (supported + 0.5*partial) / total
+          has_hallucination = 存在幻觉断言 或 faithfulness < 0.6
+        空 claims 视为检测失败，保守处理（不判干净）。
+        """
         claims = []
         for c in data.get("claims", []):
-            verdict_str = c.get("verdict", "hallucination")
+            verdict_str = self._normalize_verdict(c.get("verdict", "hallucination"))
             try:
                 verdict = ClaimVerdict(verdict_str)
             except ValueError:
@@ -128,32 +158,49 @@ class HallucinationDetector:
             1 for c in claims if c.verdict == ClaimVerdict.HALLUCINATION
         )
 
+        total = len(claims)
+        if total == 0:
+            # 空 claims = 检测失败，保守处理（不判干净，走人工/重检）
+            logger.warning("幻觉检测返回空 claims，按未通过处理")
+            return HallucinationCheck(
+                claims=[],
+                overall_faithfulness=0.0,
+                has_hallucination=True,
+            )
+
+        # 从 claims 聚合（部分有依据折半计入）
+        faithfulness = round((supported + 0.5 * partial) / total, 4)
+        has_hallucination = hallucination > 0 or faithfulness < 0.6
+
         return HallucinationCheck(
             claims=claims,
-            overall_faithfulness=float(data.get("overall_faithfulness", 0)),
-            has_hallucination=bool(data.get("has_hallucination", hallucination > 0)),
+            overall_faithfulness=faithfulness,
+            has_hallucination=has_hallucination,
             hallucination_count=hallucination,
             supported_count=supported,
             partial_count=partial,
         )
 
     def _fallback_check(self, answer: str, docs: list[str]) -> HallucinationCheck:
-        """降级检查（LLM 不可用时）"""
-        # 简单检查：回答是否包含"无法确认"等关键词
-        fallback_phrases = ["无法确认", "不确定", "没有找到", "建议咨询"]
-        has_fallback = any(phrase in answer for phrase in fallback_phrases)
+        """降级检查（LLM 不可用时）— 无法验证，标记不确定
 
-        if has_fallback:
+        修复 (P1): 之前按关键词方向误判——正常有依据的回答被判幻觉触发重写，
+        含"建议咨询"但编造的回答被判干净。改为:
+          - 诚实拒答（明确说不知道）→ 不算幻觉
+          - 无法验证 → 低忠实度 + 不触发重写（由上游质量评估决定转人工）
+        """
+        honest_phrases = ["无法确认", "不确定", "没有找到", "根据已有信息"]
+        if any(phrase in answer for phrase in honest_phrases):
             return HallucinationCheck(
                 claims=[],
-                overall_faithfulness=0.5,
+                overall_faithfulness=0.9,
                 has_hallucination=False,
             )
-
+        # 无法验证：低忠实度 + 不判幻觉（避免无谓重写），由 evaluate_quality 决定
         return HallucinationCheck(
             claims=[],
-            overall_faithfulness=0.3,
-            has_hallucination=True,
+            overall_faithfulness=0.5,
+            has_hallucination=False,
         )
 
 

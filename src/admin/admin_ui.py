@@ -21,7 +21,9 @@ import requests
 logger = logging.getLogger(__name__)
 
 # API 地址 (Docker 容器内使用服务名)
-API_BASE_URL = "http://rag-api:8000"
+import os
+
+API_BASE_URL = os.getenv("API_BASE_URL", "http://rag-api:8000")
 
 # 人工介入数据库
 HITL_DB = Path(__file__).parent.parent.parent / "data" / "hitl_requests.db"
@@ -46,6 +48,15 @@ def init_hitl_db():
                 created_at TEXT NOT NULL,
                 resolved_at TEXT DEFAULT '',
                 metadata TEXT DEFAULT '{}'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS human_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
             )
         """)
         conn.commit()
@@ -118,6 +129,38 @@ def resolve_request(request_id: int, resolution: str, assigned_to: str = ""):
             (resolution, assigned_to, datetime.now().isoformat(), request_id),
         )
         conn.commit()
+
+
+def get_human_conversation(session_id: str) -> list[dict]:
+    """获取某会话的人工对话记录"""
+    with sqlite3.connect(HITL_DB) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM human_messages WHERE session_id=? ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def send_human_reply(session_id: str, content: str) -> None:
+    """客服回复客户（保存到人工对话，客户端轮询推送）"""
+    with sqlite3.connect(HITL_DB) as conn:
+        conn.execute(
+            "INSERT INTO human_messages (session_id, role, content, created_at) VALUES (?,?,?,?)",
+            (session_id, "assistant", content, datetime.now().isoformat()),
+        )
+        conn.commit()
+
+
+def format_conversation(messages: list[dict]) -> str:
+    """格式化对话记录"""
+    if not messages:
+        return "暂无对话"
+    lines = []
+    for m in messages:
+        who = "👤 客户" if m["role"] == "user" else "🎧 客服"
+        lines.append(f"**{who}**: {m['content']}")
+    return "\n\n".join(lines)
 
 
 def get_system_stats() -> dict:
@@ -218,7 +261,77 @@ def create_admin_ui() -> gr.Blocks:
                     outputs=[requests_display],
                 )
 
-            # Tab 2: 系统监控
+            # Tab 2: 人工对话（转人工后同窗口与客户对话）
+            with gr.Tab("💬 人工对话"):
+                gr.Markdown("### 与客户实时对话（转人工后同一窗口）")
+                gr.Markdown(
+                    "客户转人工后，消息会进入这里。客服回复后，客户侧自动收到。"
+                )
+
+                conv_refresh_btn = gr.Button("🔄 刷新会话列表", variant="secondary")
+                conv_session = gr.Dropdown(
+                    label="选择会话", choices=[], interactive=True
+                )
+                conv_state = gr.State("")
+                conv_display = gr.Markdown("选择会话查看对话")
+
+                with gr.Row():
+                    conv_reply = gr.Textbox(
+                        label="客服回复", placeholder="输入回复内容...", scale=4
+                    )
+                    conv_send = gr.Button("📤 发送给客户", variant="primary", scale=1)
+                conv_status = gr.Textbox(label="状态", interactive=False)
+
+                def load_sessions():
+                    reqs = get_pending_requests()
+                    choices = [
+                        (f"#{r['id']} {r['user_query'][:20]}", r["session_id"])
+                        for r in reqs
+                    ]
+                    val = choices[0][1] if choices else None
+                    return gr.Dropdown(choices=choices, value=val, interactive=True)
+
+                def show_conv(session_id):
+                    conv_state.value = session_id or ""
+                    if not session_id:
+                        return "选择会话查看对话"
+                    return format_conversation(get_human_conversation(session_id))
+
+                def send_reply(content):
+                    sid = conv_state.value
+                    if not sid:
+                        return "请先选择会话", gr.update(), ""
+                    if not content.strip():
+                        return "请输入回复内容", gr.update(), content
+                    send_human_reply(sid, content.strip())
+                    return (
+                        f"✅ 已发送给客户: {content.strip()[:30]}",
+                        format_conversation(get_human_conversation(sid)),
+                        "",  # 清空输入框
+                    )
+
+                def refresh_conv():
+                    """自动刷新当前会话的对话（客服界面动态显示新消息）"""
+                    sid = conv_state.value
+                    if not sid:
+                        return gr.update()
+                    return format_conversation(get_human_conversation(sid))
+
+                conv_refresh_btn.click(load_sessions, outputs=[conv_session])
+                conv_session.change(
+                    show_conv, inputs=[conv_session], outputs=[conv_display]
+                )
+                conv_send.click(
+                    send_reply,
+                    inputs=[conv_reply],
+                    outputs=[conv_status, conv_display, conv_reply],
+                )
+
+                # 自动刷新: 每 5 秒更新当前会话的对话（新客户消息自动出现）
+                conv_timer = gr.Timer(5)
+                conv_timer.tick(refresh_conv, outputs=[conv_display])
+
+            # Tab 3: 系统监控
             with gr.Tab("📊 系统监控"):
                 gr.Markdown("### 系统状态")
 

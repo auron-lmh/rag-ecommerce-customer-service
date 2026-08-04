@@ -33,8 +33,10 @@ RPM_LIMIT = 120
 WINDOW_SECONDS = 60
 MAX_429_RETRIES = 5
 BASE_BACKOFF = 2.0
-MAX_ITEMS_PER_CALL = 20  # 单次 API 最多 20 个 content
-MAX_IMAGES_PER_CALL = 5  # 单次 API 最多 5 张图片
+# qwen2.5-vl-embedding 限制: 每个 API 调用 input 列表里每类（text/image）最多一次
+# （旧 qwen3-vl-embedding 支持一次传 20 个 text，qwen2.5 会报 Duplicate input type）
+MAX_ITEMS_PER_CALL = 1  # 每调用 1 个 content（不可批量）
+MAX_IMAGES_PER_CALL = 1  # 图片同理
 
 
 # ═══════════════════════════════════════

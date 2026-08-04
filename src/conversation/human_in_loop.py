@@ -65,6 +65,7 @@ class HumanInLoopHandler:
         intent: str = "",
         answer: str = "",
         confidence: float = 0.0,
+        emotion: str = "calm",
     ) -> dict:
         """检查是否需要人工介入
 
@@ -73,6 +74,7 @@ class HumanInLoopHandler:
             intent: 意图分类
             answer: 生成的回答
             confidence: 意图置信度
+            emotion: 情绪等级（calm/dissatisfied/angry/extreme）
 
         Returns:
             {
@@ -82,6 +84,30 @@ class HumanInLoopHandler:
                 "priority": str,  # low / medium / high
             }
         """
+        # 情绪极端 → 直接升级人工（辱骂/威胁/法律，不能让机器人继续"磨用户"）
+        if emotion == "extreme":
+            logger.info("人工介入: 情绪极端，直接升级")
+            return {
+                "needs_human": True,
+                "reason": "用户情绪极端（辱骂/威胁/法律升级），需人工介入",
+                "scenario": "high_emotion",
+                "priority": "high",
+            }
+
+        # 愤怒 + 退款/投诉等高敏场景 → 升级人工（压缩提问轮次，避免激化）
+        if emotion == "angry" and intent in (
+            "return_refund",
+            "complaint",
+            "order_query",
+        ):
+            logger.info("人工介入: 愤怒 + 高敏意图 (%s)", intent)
+            return {
+                "needs_human": True,
+                "reason": "用户情绪愤怒且涉及退款/投诉/订单，建议人工跟进",
+                "scenario": "high_emotion",
+                "priority": "high",
+            }
+
         # 检查场景匹配
         for scenario_id, scenario in HUMAN_REQUIRED_SCENARIOS.items():
             for keyword in scenario["keywords"]:
@@ -125,7 +151,12 @@ class HumanInLoopHandler:
 
     def _get_priority(self, scenario_id: str) -> str:
         """获取优先级"""
-        high_priority = ["refund_request", "complaint", "sensitive_topic"]
+        high_priority = [
+            "refund_request",
+            "complaint",
+            "sensitive_topic",
+            "high_emotion",
+        ]
         medium_priority = ["high_value_order"]
 
         if scenario_id in high_priority:
@@ -161,6 +192,11 @@ class HumanInLoopHandler:
                 "您的问题我需要进一步确认，"
                 "将为您转接人工客服获取更准确的信息。"
                 "请稍候。"
+            ),
+            "high_emotion": (
+                "非常抱歉给您带来不好的体验，让您着急了。"
+                "我已经将您的情况优先记录，正在为您转接专属客服专员处理，"
+                "会尽快给您一个满意的解决方案，请您稍候。"
             ),
         }
         return templates.get(scenario, "正在为您转接人工客服，请稍候。")

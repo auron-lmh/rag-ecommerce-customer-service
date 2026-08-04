@@ -28,7 +28,7 @@ LAYOUT_PROMPT = """请分析这张文档图片的版面布局，输出每个元�
 - Text: 正文段落
 - Table: 表格（text用HTML格式）
 - Formula: 数学公式（text用LaTeX格式）
-- Picture: 图片（不要text字段）
+- Picture: 图片。若是截图、聊天记录、带文字的图片（如商品评论截图、客服聊天截图），必须把图内全部文字完整提取到 text 字段；若是纯照片（没有任何文字），不要 text 字段
 - List-item: 列表项
 - Caption: 图表标题
 - Page-header: 页眉（也提取其中的文字）
@@ -177,6 +177,11 @@ def _layoutjson2md(
                     img_idx += 1
                 except Exception:
                     pass
+
+            # 改进B: 截图/聊天记录等含文字图片，图内文字进入 Markdown（可被检索）
+            # base64 图片在入库时会被剥离（chunking/router.py），只留这段文字
+            if text:
+                parts.append(text)
             continue
 
         if not text:

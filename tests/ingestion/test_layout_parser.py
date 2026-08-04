@@ -144,3 +144,38 @@ def test_prompt_contains_key_elements():
     assert "JSON" in LAYOUT_PROMPT
     assert "Picture" in LAYOUT_PROMPT
     assert "阅读顺序" in LAYOUT_PROMPT
+
+
+# ═══════════════════════════════════════
+# 场景8: 截图类图片（改进B: 图内文字提取）
+# ═══════════════════════════════════════
+
+
+def test_picture_with_text_extracted():
+    """截图/聊天记录类图片，图内文字应进入 Markdown（可被检索）"""
+    cells = [
+        {
+            "bbox": [100, 100, 500, 300],
+            "category": "Picture",
+            "text": "用户: 什么时候发货?\n客服: 24小时内发货",
+        },
+    ]
+    markdown = _layoutjson2md(cells)
+    assert "什么时候发货" in markdown
+    assert "24小时内发货" in markdown
+
+
+def test_pure_photo_no_text():
+    """纯照片（无 text 字段）不应产生额外文本"""
+    cells = [
+        {"bbox": [100, 100, 500, 300], "category": "Picture"},
+    ]
+    markdown = _layoutjson2md(cells)
+    assert markdown == ""  # 无 origin_image → 无图片嵌入，无文字 → 空
+
+
+def test_prompt_instructs_picture_text_extraction():
+    """Prompt 应要求截图/含文字图片提取文字（改进B核心）"""
+    assert "截图" in LAYOUT_PROMPT
+    assert "聊天记录" in LAYOUT_PROMPT
+    assert "提取" in LAYOUT_PROMPT
