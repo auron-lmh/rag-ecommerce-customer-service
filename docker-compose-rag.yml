@@ -36,6 +36,7 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - TZ=Asia/Shanghai
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}
@@ -71,6 +72,7 @@ services:
     ports:
       - "7860:7860"
     environment:
+      - TZ=Asia/Shanghai
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}
@@ -108,6 +110,7 @@ services:
     ports:
       - "7861:7861"
     environment:
+      - TZ=Asia/Shanghai
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}
@@ -145,6 +148,7 @@ services:
     ports:
       - "7862:7862"
     environment:
+      - TZ=Asia/Shanghai
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}
