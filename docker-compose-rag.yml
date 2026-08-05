@@ -47,6 +47,12 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - ZHIPU_API_KEY=${ZHIPU_API_KEY}
       - VISION_MODEL=${VISION_MODEL:-glm-4v-flash}
+      # 订单/物流查询复用第二项目 copilot MySQL（VM 上 docker-mysql-1 发布 0.0.0.0:3306）
+      - MYSQL_HOST=192.168.191.128
+      - MYSQL_PORT=3306
+      - MYSQL_USER=${MYSQL_USER:-agent_ro}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-AgentReadOnly2026}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-copilot}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
