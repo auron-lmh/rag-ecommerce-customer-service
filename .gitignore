@@ -17,7 +17,7 @@ __pycache__/
 *.log
 
 # Generated data (may contain processed documents)
-data/
+data/*
 !data/db/            # copilot 数据库归属（init/seed 脚本，第二项目废弃后由本项目接管）
 output/
 uploads/
