@@ -186,38 +186,12 @@
 
 ## 🏗️ 系统架构
 
-```mermaid
-graph TD
-    A["用户查询"] --> B["classify_intent<br/>(LLM Function Calling 意图分类 + 实体提取)"]
-    B --> C["check_human<br/>(高风险预判 + 情绪识别)"]
-    C --> D{"route_decision<br/>路由决策"}
+<p align="center">
+  <img src="docs/screenshots/architecture.png" width="90%" alt="系统架构图">
+</p>
 
-    D -->|rag| E["retrieve<br/>(双路召回 + 5级降级)"]
-    D -->|policy| P2["policy_handler<br/>(退货结构化政策)"]
-    D -->|human| F["human_handler<br/>(转人工 + 交接包)"]
-    D -->|sql| G["sql_handler<br/>(订单/物流工具查询)"]
-    D -->|direct| H["direct_reply<br/>(闲聊)"]
-
-    E --> I{"check_retrieval<br/>检索结果检查"}
-    I -->|有结果| J["generate<br/>(生成 + 幻觉检测 + 自纠正)"]
-    I -->|空/降级| K["web_search<br/>(联网搜索兜底)"]
-    K --> J
-
-    J --> L["evaluate_quality<br/>(忠实度 + 高敏承诺核验)"]
-    L -->|通过| M["END ✅"]
-    L -->|不通过| N["human_approval<br/>(人工审批 HITL)"]
-    N -->|批准| M
-    N -->|拒绝| O["rewrite_and_retrieve<br/>(改写 + 重新检索)"]
-    O -->|loop < 3| E
-    O -->|loop >= 3| P["error<br/>(兜底)"]
-
-    F --> M; G --> M; H --> M; P2 --> M; P --> M
-
-    style A fill:#e1f5fe
-    style M fill:#c8e6c9
-    style N fill:#fff9c4
-    style P fill:#ffcdd2
-```
+> 说明：GitHub 原生 Mermaid 渲染该图报布局错误，已用 mermaid-cli 渲染为 PNG 图片。
+> 可编辑的 Mermaid 源图见 [`docs/architecture.mmd`](docs/architecture.mmd)。
 
 ### 检索降级流程
 

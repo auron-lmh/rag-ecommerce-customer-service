@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     redis_port: int = 6379
     redis_db: int = 0
 
+    # ========== 订单/物流数据库（复用第二项目 copilot MySQL，src/orders） ==========
+    mysql_host: str = "127.0.0.1"
+    mysql_port: int = 3306
+    mysql_user: str = "agent_ro"  # 只读账号
+    mysql_password: str = ""  # .env 提供
+    mysql_database: str = "copilot"
+
     # ========== 联网搜索 ==========
     tavily_api_key: str = ""  # Tavily Search API Key (可选)
     web_search_enabled: bool = True  # 是否启用联网搜索降级
