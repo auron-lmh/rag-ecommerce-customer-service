@@ -16,9 +16,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      # 固定 ruff 版本：新版默认启用 UP007/BLE001 等新规则，会把既有 Optional 风格全标出来
-      - run: uv pip install 'ruff>=0.15,<0.16' --system
-      - run: ruff check src/
+      # uv venv 避免 --system 在 PEP 668(externally-managed) 环境失败
+      - run: uv venv
+      # 固定 ruff 0.15.x：新版默认启用 UP007/BLE001 等新规则，会把既有 Optional 风格全标出来
+      - run: uv pip install 'ruff>=0.15,<0.16'
+      - run: uv run ruff check src/
 
   # ── 单元测试 ──
   test:
@@ -32,10 +34,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # pytest 系列在 pyproject dev-deps，requirements.txt 不含 → CI 显式装
-      - run: uv pip install -r requirements.txt pytest pytest-asyncio pytest-cov --system
+      - run: uv venv
+      # pytest 系列在 pyproject dev-deps，requirements.txt 不含 → 显式装
+      - run: uv pip install -r requirements.txt pytest pytest-asyncio pytest-cov
       - run: |
-          pytest tests/ \
+          uv run pytest tests/ \
             -m "not slow and not integration" \
             -v --tb=short \
             --cov=src/ \
@@ -57,8 +60,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv pip install -r requirements.txt mypy --system
-      - run: mypy src/ --ignore-missing-imports || echo "类型检查有警告（非阻断）"
+      - run: uv venv
+      - run: uv pip install -r requirements.txt mypy
+      - run: uv run mypy src/ --ignore-missing-imports || echo "类型检查有警告（非阻断）"
 
   # ── 安全检查 ──
   security:
