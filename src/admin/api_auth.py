@@ -1,6 +1,6 @@
-"""模块13 管理后台 API 鉴权辅助 — Gradio UI 内部调用 API 时自动登录携带 JWT
+"""模块33 管理后台 API 鉴权辅助 — Gradio UI 内部调用 API 时自动登录携带 JWT
 
-背景: 模块13 之后 API 全部需要鉴权，Gradio 三端作为内部调用方，
+背景: 模块33 之后 API 全部需要鉴权，Gradio 三端作为内部调用方，
 启动时用配置账号登录一次拿 token，后续请求带 Authorization 头。
 
 账号通过环境变量配置（默认 demo 账号）:

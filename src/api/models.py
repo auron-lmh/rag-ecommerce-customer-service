@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-# ── 鉴权 (模块13) ──
+# ── 鉴权 (模块33) ──
 
 
 class LoginRequest(BaseModel):
@@ -67,7 +67,7 @@ class UploadRequest(BaseModel):
     effective_to: str | None = Field(
         None, description="过期日期 YYYY-MM-DD（留空=永不过期）"
     )
-    # 模块13 内容权限: 入库时给文档打权限标签（public/member/vip）
+    # 模块33 内容权限: 入库时给文档打权限标签（public/member/vip）
     access_level: str = Field(
         "public", description="内容等级 public/member/vip（普通用户默认只能看 public）"
     )

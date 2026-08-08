@@ -123,7 +123,7 @@ class RetrievalEvaluator:
         Args:
             test_case: 测试用例
             use_llm_eval: 是否使用 LLM 评估忠实度（默认 False 用快速模式）
-            access_level: 模块13 内容权限等级。评测面向完整知识库，默认 vip(全量)
+            access_level: 模块33 内容权限等级。评测面向完整知识库，默认 vip(全量)
 
         Returns:
             EvalResult
@@ -190,7 +190,7 @@ class RetrievalEvaluator:
         Args:
             test_case: 测试用例
             use_llm_eval: 是否使用 LLM 评估忠实度
-            access_level: 模块13 内容权限等级。评测面向完整知识库，默认 vip(全量)
+            access_level: 模块33 内容权限等级。评测面向完整知识库，默认 vip(全量)
 
         Returns:
             EvalResult

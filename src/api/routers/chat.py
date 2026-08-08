@@ -36,7 +36,7 @@ async def chat(
       4. 多级降级检索 (Level 1→2→3→4, 按用户等级过滤)
       5. 幻觉检测 + 自纠正闭环 (最多2轮)
     """
-    # ── 模块13: 会话按用户隔离（用户 A 永远只能触达 "{username}:" 前缀的 key）──
+    # ── 模块33: 会话按用户隔离（用户 A 永远只能触达 "{username}:" 前缀的 key）──
     sid = f"{current_user.username}:{req.session_id}"
 
     # ── 第0步: PII 脱敏 ──

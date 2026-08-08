@@ -56,7 +56,7 @@ async def upload_by_path(
             elapsed_seconds=round(time.time() - t0, 1),
         )
 
-    # 政策时效元数据（改进4）+ 模块13 内容权限标签
+    # 政策时效元数据（改进4）+ 模块33 内容权限标签
     doc_metadata = {
         "version": req.version,
         "effective_from": req.effective_from,
@@ -126,7 +126,7 @@ async def upload_file(
             elapsed_seconds=round(time.time() - t0, 1),
         )
 
-    # 政策时效元数据（改进4）+ 模块13 内容权限标签
+    # 政策时效元数据（改进4）+ 模块33 内容权限标签
     doc_metadata = {
         "version": version,
         "effective_from": effective_from,

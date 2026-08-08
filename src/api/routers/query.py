@@ -37,7 +37,7 @@ async def query(
         filter_by_doc_type=req.filter_doc_type,
         filter_by_source=req.filter_source,
         threshold=req.threshold,
-        # 模块13: 按当前用户等级过滤（access_level <= 用户等级才可见）
+        # 模块33: 按当前用户等级过滤（access_level <= 用户等级才可见）
         access_level=current_user.access_level,
     )
 

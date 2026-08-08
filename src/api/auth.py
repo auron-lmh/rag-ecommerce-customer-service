@@ -1,4 +1,4 @@
-"""模块13 JWT 鉴权 — 令牌签发/解码 + 当前用户模型 + 登录认证
+"""模块33 JWT 鉴权 — 令牌签发/解码 + 当前用户模型 + 登录认证
 
 闭环: 登录 → JWT(role) → get_current_user(身份) → 检索按 access_level 过滤知识范围。
 身份只信 header(Bearer JWT)，不放 body（可伪造）。

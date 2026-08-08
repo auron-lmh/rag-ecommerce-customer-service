@@ -86,7 +86,7 @@ class SelfCorrector:
             use_rerank: 是否启用 Reranker
             max_rounds: 最大纠正轮数
             faithfulness_threshold: 忠实度阈值
-            access_level: 模块13 内容权限等级，透传给初始检索 + 纠正循环重新检索
+            access_level: 模块33 内容权限等级，透传给初始检索 + 纠正循环重新检索
 
         Returns:
             GenerationResult
@@ -134,7 +134,7 @@ class SelfCorrector:
             use_rerank: 是否启用 Reranker
             max_rounds: 最大纠正轮数
             faithfulness_threshold: 忠实度阈值
-            access_level: 模块13 内容权限等级，透传给纠正循环重新检索
+            access_level: 模块33 内容权限等级，透传给纠正循环重新检索
                           ★workflow 空 docs 兜底会触发这里再检索，漏传=受限用户无过滤重搜
 
         Returns:

@@ -4,7 +4,7 @@
     uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000
 
 端点:
-    POST /api/auth/login     登录（JWT，模块13）
+    POST /api/auth/login     登录（JWT，模块33）
     POST /api/query          语义检索（需登录，按 access_level 过滤）
     POST /api/chat           智能对话（需登录）
     POST /api/chat/stream    流式对话（需登录）
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """应用生命周期 — 启动时执行轻量迁移
 
-    模块13: 已有 Milvus collection 自动补 access_level 字段（INT8 + INVERTED 索引）。
+    模块33: 已有 Milvus collection 自动补 access_level 字段（INT8 + INVERTED 索引）。
     Milvus 不可达/无 collection 时静默跳过（连接被拒绝快速失败，不阻塞启动）。
     """
     try:
@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
             "- Hybrid Search (BM25 + 稠密向量)\n"
             "- Qwen3-VL-Reranker 重排序\n"
             "- 多格式文档摄入 (PDF/Office/图片/网页/FAQ)\n"
-            "- 模块13: JWT 鉴权 + 内容级权限隔离 (access_level)"
+            "- 模块33: JWT 鉴权 + 内容级权限隔离 (access_level)"
         ),
         version="0.4.0",
         docs_url="/docs",
@@ -65,7 +65,7 @@ def create_app() -> FastAPI:
     )
 
     # ── CORS ──
-    # 模块13: 收紧到白名单（"*" + credentials 是无效组合，浏览器会拒收凭据）
+    # 模块33: 收紧到白名单（"*" + credentials 是无效组合，浏览器会拒收凭据）
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
 
-    # ========== 鉴权 (JWT, 模块13) ==========
+    # ========== 鉴权 (JWT, 模块33) ==========
     jwt_secret: str = (
         "dev-secret-change-me-0123456789abcdef0123456789abcdef"  # 生产必须用 .env 覆盖
     )

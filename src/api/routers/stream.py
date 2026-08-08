@@ -46,7 +46,7 @@ async def chat_stream(
       3. 多级降级检索（按用户等级过滤）
       4. 流式生成回答
     """
-    # 模块13: 会话按用户隔离
+    # 模块33: 会话按用户隔离
     sid = f"{current_user.username}:{session_id}"
 
     session_manager = get_session_manager()

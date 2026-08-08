@@ -205,7 +205,7 @@ def chat_with_bot(message: str, history: list) -> tuple:
         return history, "🔴 人工模式：消息已转人工客服，等待回复中..."
 
     try:
-        # 调用 API（模块13: 携带 JWT）
+        # 调用 API（模块33: 携带 JWT）
         from src.admin.api_auth import auth_headers
 
         resp = requests.post(

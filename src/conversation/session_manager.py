@@ -63,7 +63,7 @@ class SessionManager:
                     FOREIGN KEY (session_id) REFERENCES conversations(session_id)
                 )
             """)
-            # 模块13: 旧库升级 — 补 user_id 列（try/except 防呆：已存在则跳过）
+            # 模块33: 旧库升级 — 补 user_id 列（try/except 防呆：已存在则跳过）
             try:
                 conn.execute(
                     "ALTER TABLE conversations ADD COLUMN user_id TEXT DEFAULT ''"

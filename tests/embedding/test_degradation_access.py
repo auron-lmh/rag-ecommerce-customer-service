@@ -1,4 +1,4 @@
-"""模块13 降级检索权限透传 — 各级检索都必须携带 access_level"""
+"""模块33 降级检索权限透传 — 各级检索都必须携带 access_level"""
 
 from src.embedding.degradation import DegradationStrategy
 from src.embedding.models import SearchResponse, SearchResult

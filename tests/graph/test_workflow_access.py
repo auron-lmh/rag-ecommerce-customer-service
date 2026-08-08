@@ -1,4 +1,4 @@
-"""模块13 工作流权限透传 — RAGState.access_level → retrieve_docs → search_with_degradation
+"""模块33 工作流权限透传 — RAGState.access_level → retrieve_docs → search_with_degradation
 
 注意: 只测节点级透传（monkeypatch 掉降级策略），不跑完整 LangGraph（依赖 LLM/Milvus）。
 """

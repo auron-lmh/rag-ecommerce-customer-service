@@ -98,7 +98,7 @@ class DegradationStrategy:
             use_rerank: 是否启用 Reranker
             secondary_query: 改写后问题（提供时 Level 1 走双路召回，
                              原始+改写并行合并去重；不提供则退化为单路）
-            access_level: 模块13 内容权限等级，透传给各级检索（Level 0-3）
+            access_level: 模块33 内容权限等级，透传给各级检索（Level 0-3）
 
         Returns:
             DegradationResult
@@ -318,7 +318,7 @@ class DegradationStrategy:
         合并去重后返回最佳结果。子问题上限由 QueryExpander 控制（3~5 个）。
 
         Args:
-            access_level: 模块13 内容权限等级，透传给子查询 + HyDE 检索
+            access_level: 模块33 内容权限等级，透传给子查询 + HyDE 检索
         """
         from .query_expansion import get_query_expander
 

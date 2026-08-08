@@ -1,4 +1,4 @@
-"""模块13 JWT 鉴权 — 登录 / 令牌签发解码 / 管理面闸口 / 无 token 401"""
+"""模块33 JWT 鉴权 — 登录 / 令牌签发解码 / 管理面闸口 / 无 token 401"""
 
 from datetime import datetime, timedelta, timezone
 

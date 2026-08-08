@@ -146,7 +146,7 @@ class IndexingPipeline:
                     if v is not None:
                         meta[k] = v
 
-        # 模块13 内容权限: access_level 规范化为 int rank（Milvus 顶层标量），
+        # 模块33 内容权限: access_level 规范化为 int rank（Milvus 顶层标量），
         # 可读名保留在 label 供调试/展示。非法值 fail-safe 回退 public(0)。
         for meta in metadata_list:
             label = str(meta.get("access_level", "public"))

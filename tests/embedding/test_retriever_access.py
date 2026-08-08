@@ -1,4 +1,4 @@
-"""模块13 检索权限透传 — filter_expr 构造 / 缓存 key 隔离 / 双路&批量透传
+"""模块33 检索权限透传 — filter_expr 构造 / 缓存 key 隔离 / 双路&批量透传
 
 伪 store 捕获每次检索收到的 filter_expr 与调用次数，
 验证权限过滤在向量检索阶段生效、缓存 key 含 access_level。

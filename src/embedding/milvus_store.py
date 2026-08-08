@@ -6,7 +6,7 @@ Schema:
   - dense: FLOAT_VECTOR(2048), qwen3-vl-embedding
   - sparse: SPARSE_FLOAT_VECTOR, 由 BM25 Function 自动生成
   - doc_type / source_file / heading_path / chunk_metadata
-  - access_level: INT8 内容等级 rank (0=public, 1=member, 2=vip, 模块13)
+  - access_level: INT8 内容等级 rank (0=public, 1=member, 2=vip, 模块33)
 
 索引:
   - dense: AUTOINDEX (IP 度量)
@@ -123,7 +123,7 @@ class MilvusStore:
         )
         schema.add_field(field_name="heading_path", datatype=DataType.JSON)
         schema.add_field(field_name="chunk_metadata", datatype=DataType.JSON)
-        # 模块13 内容权限: 顶层 INT8 rank (0=public,1=member,2=vip)。必须显式声明
+        # 模块33 内容权限: 顶层 INT8 rank (0=public,1=member,2=vip)。必须显式声明
         # (enable_dynamic_field=False)，不能用字符串(字典序 "member"<"public"<"vip" 语义错位)。
         schema.add_field(field_name=MILVUS_ACCESS_FIELD, datatype=DataType.INT8)
 
@@ -155,7 +155,7 @@ class MilvusStore:
             index_type="AUTOINDEX",
             metric_type="IP",
         )
-        # 模块13 权限过滤标量索引
+        # 模块33 权限过滤标量索引
         index_params.add_index(
             field_name=MILVUS_ACCESS_FIELD,
             index_name="idx_access",
@@ -176,7 +176,7 @@ class MilvusStore:
         except Exception:
             return False
 
-    # ── 权限字段迁移 (模块13) ──
+    # ── 权限字段迁移 (模块33) ──
 
     def ensure_access_level_field(self) -> str:
         """给已有 collection 补齐 access_level 字段（升级/迁移用）。
@@ -263,7 +263,7 @@ class MilvusStore:
                     "doc_type": e.metadata.get("doc_type", ""),
                     "source_file": e.metadata.get("source_file", ""),
                     "heading_path": e.metadata.get("heading_path", []),
-                    # 模块13: 权限等级提到顶层标量 (fail-safe 默认 public=0)
+                    # 模块33: 权限等级提到顶层标量 (fail-safe 默认 public=0)
                     MILVUS_ACCESS_FIELD: int(
                         parse_access_level(e.metadata.get("access_level", "public"))
                     ),

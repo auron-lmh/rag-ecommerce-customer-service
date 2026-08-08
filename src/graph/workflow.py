@@ -56,7 +56,7 @@ class RAGState(TypedDict):
     use_reranker: bool
     history: list  # 会话历史（多轮指代消解用）
     memory_context: str  # 会话记忆（实体ledger/滚动摘要/历史片段）
-    access_level: str = "public"  # 模块13 内容权限等级（检索过滤用，fail-safe 最低）
+    access_level: str = "public"  # 模块33 内容权限等级（检索过滤用，fail-safe 最低）
 
     # 意图分类结果
     intent: str
@@ -285,7 +285,7 @@ def generate_answer(state: RAGState) -> dict:
         {d.get("source_file", "") for d in retrieved_docs if d.get("source_file")}
     )
 
-    # 模块13: 空 docs 兜底会触发 generate_with_correction 内部再检索，
+    # 模块33: 空 docs 兜底会触发 generate_with_correction 内部再检索，
     # 必须透传 access_level —— 否则受限用户在"检索空→自行重搜"时无过滤漏检索（头号隐性泄漏）
     access_level = state.get("access_level", "public")
 
@@ -847,7 +847,7 @@ class RAGWorkflow:
                     用于多轮指代消解（可为空）
             memory_context: 会话记忆上下文（实体ledger/滚动摘要/历史片段），
                     解析"上次那个券"类跨轮指代
-            access_level: 模块13 内容权限等级（检索过滤用，fail-safe 最低）
+            access_level: 模块33 内容权限等级（检索过滤用，fail-safe 最低）
 
         Returns:
             状态字典。如果图中断，会包含 "__interrupt__" 标记

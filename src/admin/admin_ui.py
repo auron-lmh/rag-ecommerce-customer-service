@@ -25,7 +25,7 @@ import os
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://rag-api:8000")
 
-# 模块13: 管理端用 admin 账号登录 API（在 api_auth 首次导入前设好 env 默认）
+# 模块33: 管理端用 admin 账号登录 API（在 api_auth 首次导入前设好 env 默认）
 os.environ.setdefault("API_USERNAME", "admin")
 os.environ.setdefault("API_PASSWORD", "admin123")
 

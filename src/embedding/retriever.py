@@ -147,7 +147,7 @@ class Retriever:
         threshold: Optional[float] = None,
         sparse_weight: float = 0.3,  # BM25 关键词权重 (辅助)
         dense_weight: float = 0.7,  # 语义向量权重 (主力)
-        access_level: str = "public",  # 模块13 内容权限: 用户等级, fail-safe 最低权限
+        access_level: str = "public",  # 模块33 内容权限: 用户等级, fail-safe 最低权限
     ) -> SearchResponse:
         """检索相关文档
 
@@ -172,7 +172,7 @@ class Retriever:
         # ── 查询缓存 ──
         cache = _get_cache()
         # 关键修复: 缓存 Key 包含所有查询参数（含过滤条件），避免返回错误缓存
-        # 模块13: 必须含 access_level —— 不同权限用户命中彼此缓存 = 越权泄漏
+        # 模块33: 必须含 access_level —— 不同权限用户命中彼此缓存 = 越权泄漏
         cache_key = (
             f"{query}:{top_k}:{use_hybrid}:{use_rerank}:{filter_by_doc_type}:"
             f"{filter_by_source}:{threshold}:{access_level}"
@@ -191,7 +191,7 @@ class Retriever:
         if filter_by_source:
             safe_source = filter_by_source.replace('"', '\\"')
             filter_parts.append(f'source_file == "{safe_source}"')
-        # 模块13 内容权限: 用户等级 >= 文档等级才可见（access_level <= {rank}）。
+        # 模块33 内容权限: 用户等级 >= 文档等级才可见（access_level <= {rank}）。
         # 在向量检索阶段过滤，越权内容根本进不了召回集。
         filter_parts.append(build_access_filter_expr(access_level))
         filter_expr = " && ".join(filter_parts) if filter_parts else None
@@ -281,7 +281,7 @@ class Retriever:
             threshold: 最低相似度阈值
             filter_by_doc_type: 按文档类型过滤
             filter_by_source: 按来源文件过滤
-            access_level: 模块13 内容权限等级，透传给两路内部检索
+            access_level: 模块33 内容权限等级，透传给两路内部检索
 
         Returns:
             SearchResponse（合并去重后的结果）
@@ -361,7 +361,7 @@ class Retriever:
         if use_rerank is None:
             use_rerank = settings.reranker_enabled
 
-        # 模块13: 批量检索同样必须带权限过滤，否则评估/批量场景无差别召回越权内容
+        # 模块33: 批量检索同样必须带权限过滤，否则评估/批量场景无差别召回越权内容
         filter_expr = build_access_filter_expr(access_level)
 
         query_vectors = self.embedder.embed_queries(queries)

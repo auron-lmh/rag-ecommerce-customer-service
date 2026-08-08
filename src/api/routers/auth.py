@@ -1,4 +1,4 @@
-"""模块13 登录路由 — POST /api/auth/login
+"""模块33 登录路由 — POST /api/auth/login
 
 用户面/管理面统一登录入口，签发 JWT。后续请求带 Authorization: Bearer <token>。
 """

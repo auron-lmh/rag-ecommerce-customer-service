@@ -1,4 +1,4 @@
-"""模块12 依赖注入 — FastAPI Depends 工厂 + 模块13 鉴权依赖"""
+"""模块12 依赖注入 — FastAPI Depends 工厂 + 模块33 鉴权依赖"""
 
 from functools import lru_cache
 
@@ -12,7 +12,7 @@ from src.embedding.milvus_store import MilvusStore
 from src.embedding.pipeline import IndexingPipeline
 from src.embedding.retriever import Retriever
 
-# ── 模块13 鉴权依赖 ──
+# ── 模块33 鉴权依赖 ──
 
 # auto_error=False: 无凭据时不自动 401，让我们手动控制响应体
 _bearer = HTTPBearer(auto_error=False)
