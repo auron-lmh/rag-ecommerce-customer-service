@@ -109,6 +109,18 @@
 | 文档过滤 | 入库前检查恶意内容 | ✅ |
 | 输出护栏 | 防止系统提示词泄露 | ✅ |
 
+### 🔐 鉴权 + 内容级权限隔离（模块33）
+
+| 功能 | 说明 | 状态 |
+|------|------|------|
+| **JWT 鉴权** | `/api/auth/login` 签发（sub/role/access_level/exp），`get_current_user`/`require_admin` 依赖 | ✅ |
+| **内容级权限隔离** | 层级 `access_level: public(0) < member(1) < vip(2)`，入库打标签、检索 `access_level <= 用户等级` 过滤 | ✅ |
+| **缓存隔离** | 检索缓存 key 含 access_level，不同权限用户不串缓存 | ✅ |
+| **全链路透传** | 降级 5 级 / 查询扩展 / 双路召回 / 自纠正 / 工作流兜底 7 个调用点逐层透传，默认 public fail-safe | ✅ |
+| **会话隔离** | 会话按 `{username}:{session_id}` 命名空间隔离 | ✅ |
+| 管理面保护 | upload/stats/evaluate 需 admin；`/api/health` 公开探活 | ✅ |
+| demo 用户 | admin/vip/member/normal 四档（.env 可覆盖） | ✅ |
+
 ### 📊 评估体系
 
 | 指标 | 实现方式 | 状态 |
@@ -212,7 +224,7 @@ Level 5: 诚实兜底
 
 ## 📐 架构决策记录 (ADR)
 
-关键设计决策的背景/取舍/后果记录在 [docs/ADR.md](docs/ADR.md)（8 个 ADR：检索架构/双路召回/幻觉检测/三层记忆/政策时效/PDF解析/高敏护栏/模型选型）。
+关键设计决策的背景/取舍/后果记录在 [docs/ADR.md](docs/ADR.md)（9 个 ADR：检索架构/双路召回/幻觉检测/三层记忆/政策时效/PDF解析/高敏护栏/模型选型/内容级权限隔离）。
 
 ---
 
@@ -254,7 +266,17 @@ docker compose -f docker-compose-rag.yml up -d --build   # RAG 服务
 | 用户聊天 | http://localhost:7861 | 客服对话 |
 | 管理员控制台 | http://localhost:7862 | 人工介入管理 |
 
-### 4. 评测
+### 4. 鉴权（模块33 起 API 需登录）
+
+```bash
+# 登录拿 token（用户面: 任意用户；管理面: admin）
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"member","password":"member123"}' | python3 -c "import sys,json;print(json.load(sys.stdin)['access_token'])")
+# 后续请求带 Authorization: Bearer $TOKEN
+```
+
+### 5. 评测
 
 ```bash
 # 检索指标
@@ -281,7 +303,7 @@ src/
 ├── graph/           # LangGraph 13 节点 StateGraph + 条件边 + HITL
 ├── orders/          # 订单/物流查询工具 (mock 数据库)
 ├── business/        # 退货结构化政策工具
-├── api/             # FastAPI + 路由 (query/chat/stream/upload/evaluate/stats)
+├── api/             # FastAPI + 路由 (auth/query/chat/stream/upload/evaluate/stats)
 ├── admin/           # Gradio UI ×3 (入库/聊天/管理员)
 └── config.py        # pydantic-settings 配置中心
 ```
@@ -355,6 +377,7 @@ HIGH_STAKE_FAITHFULNESS=0.85
 - [x] 4 种分块策略 + 内容形态路由 + 策略变更检测
 - [x] 评估体系 (9 指标 + 金标准测试 + 幻觉率)
 - [x] 4 层安全防御 + PII 脱敏 + 熔断器
+- [x] JWT 鉴权 + 内容级权限隔离（RBAC + 检索过滤 + 缓存/会话隔离）
 - [x] Docker Compose + CI/CD + 时区修复
 - [ ] RAGAS 评估集成
 - [ ] Graph RAG (知识图谱)
