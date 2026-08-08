@@ -10,6 +10,7 @@
 import logging
 from typing import Optional
 
+from src.access import build_access_filter_expr
 from src.config import settings
 
 from .embedder import Embedder, get_embedder
@@ -146,6 +147,7 @@ class Retriever:
         threshold: Optional[float] = None,
         sparse_weight: float = 0.3,  # BM25 关键词权重 (辅助)
         dense_weight: float = 0.7,  # 语义向量权重 (主力)
+        access_level: str = "public",  # 模块13 内容权限: 用户等级, fail-safe 最低权限
     ) -> SearchResponse:
         """检索相关文档
 
@@ -159,6 +161,8 @@ class Retriever:
             threshold: 最低相似度阈值
             sparse_weight: BM25 关键词权重 (默认 0.3)
             dense_weight: 稠密向量权重 (默认 0.7)
+            access_level: 内容权限等级 public/member/vip。漏传默认 public(最低)=只返回公开内容,
+                         永不泄漏。★必须拼进缓存 key,否则高权限用户缓存被低权限用户命中=直接泄漏。
         """
         if threshold is None:
             threshold = settings.retrieval_similarity_threshold
@@ -168,7 +172,11 @@ class Retriever:
         # ── 查询缓存 ──
         cache = _get_cache()
         # 关键修复: 缓存 Key 包含所有查询参数（含过滤条件），避免返回错误缓存
-        cache_key = f"{query}:{top_k}:{use_hybrid}:{use_rerank}:{filter_by_doc_type}:{filter_by_source}:{threshold}"
+        # 模块13: 必须含 access_level —— 不同权限用户命中彼此缓存 = 越权泄漏
+        cache_key = (
+            f"{query}:{top_k}:{use_hybrid}:{use_rerank}:{filter_by_doc_type}:"
+            f"{filter_by_source}:{threshold}:{access_level}"
+        )
         cached = cache.get_query_result(cache_key)
         if cached:
             logger.debug("缓存命中: %s", query[:50])
@@ -183,6 +191,9 @@ class Retriever:
         if filter_by_source:
             safe_source = filter_by_source.replace('"', '\\"')
             filter_parts.append(f'source_file == "{safe_source}"')
+        # 模块13 内容权限: 用户等级 >= 文档等级才可见（access_level <= {rank}）。
+        # 在向量检索阶段过滤，越权内容根本进不了召回集。
+        filter_parts.append(build_access_filter_expr(access_level))
         filter_expr = " && ".join(filter_parts) if filter_parts else None
 
         # ── 向量化 ──
@@ -252,6 +263,9 @@ class Retriever:
         top_k: int = 5,
         use_rerank: bool = True,
         threshold: Optional[float] = None,
+        filter_by_doc_type: Optional[str] = None,
+        filter_by_source: Optional[str] = None,
+        access_level: str = "public",
     ) -> SearchResponse:
         """双路召回 + 合并去重（两步检索）
 
@@ -265,6 +279,9 @@ class Retriever:
             top_k: 最终返回数
             use_rerank: 是否 Reranker 精排
             threshold: 最低相似度阈值
+            filter_by_doc_type: 按文档类型过滤
+            filter_by_source: 按来源文件过滤
+            access_level: 模块13 内容权限等级，透传给两路内部检索
 
         Returns:
             SearchResponse（合并去重后的结果）
@@ -275,14 +292,31 @@ class Retriever:
                 top_k=top_k,
                 use_rerank=use_rerank,
                 threshold=threshold,
+                filter_by_doc_type=filter_by_doc_type,
+                filter_by_source=filter_by_source,
+                access_level=access_level,
             )
 
         # 召回阶段取更多候选（供合并 + 精排筛选）
         recall_k = max(top_k, settings.retrieval_dense_top_k) if use_rerank else top_k
 
-        r1 = self.search(query, top_k=recall_k, use_rerank=False, threshold=threshold)
+        r1 = self.search(
+            query,
+            top_k=recall_k,
+            use_rerank=False,
+            threshold=threshold,
+            filter_by_doc_type=filter_by_doc_type,
+            filter_by_source=filter_by_source,
+            access_level=access_level,
+        )
         r2 = self.search(
-            secondary_query, top_k=recall_k, use_rerank=False, threshold=threshold
+            secondary_query,
+            top_k=recall_k,
+            use_rerank=False,
+            threshold=threshold,
+            filter_by_doc_type=filter_by_doc_type,
+            filter_by_source=filter_by_source,
+            access_level=access_level,
         )
 
         merged = _merge_results(r1.results, r2.results)
@@ -319,12 +353,16 @@ class Retriever:
         use_hybrid: bool = True,
         use_rerank: Optional[bool] = None,
         threshold: Optional[float] = None,
+        access_level: str = "public",
     ) -> list[SearchResponse]:
         """批量检索"""
         if threshold is None:
             threshold = settings.retrieval_similarity_threshold
         if use_rerank is None:
             use_rerank = settings.reranker_enabled
+
+        # 模块13: 批量检索同样必须带权限过滤，否则评估/批量场景无差别召回越权内容
+        filter_expr = build_access_filter_expr(access_level)
 
         query_vectors = self.embedder.embed_queries(queries)
         responses = []
@@ -335,12 +373,14 @@ class Retriever:
                     query_text=q,
                     top_k=top_k,
                     threshold=threshold,
+                    filter_expr=filter_expr,
                 )
             else:
                 r = self.store.dense_search(
                     query_vector=query_vectors[i].tolist(),
                     top_k=top_k,
                     threshold=threshold,
+                    filter_expr=filter_expr,
                 )
             r.query = q
 

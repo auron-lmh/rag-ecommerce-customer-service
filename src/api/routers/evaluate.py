@@ -7,7 +7,8 @@ import logging
 
 from fastapi import APIRouter, Depends
 
-from src.api.deps import get_retriever
+from src.api.auth import CurrentUser
+from src.api.deps import get_retriever, require_admin
 from src.embedding.retriever import Retriever
 from src.evaluation import get_evaluator
 
@@ -19,8 +20,9 @@ router = APIRouter(prefix="/api", tags=["评估"])
 @router.post("/evaluate")
 async def evaluate(
     retriever: Retriever = Depends(get_retriever),
+    admin: CurrentUser = Depends(require_admin),
 ) -> dict:
-    """运行自动化评测
+    """运行自动化评测（仅管理员，面向完整知识库全量权限）
 
     使用默认评测数据集（5条电商场景用例），
     计算 Recall@5, MRR, Faithfulness, Latency 等指标。
@@ -39,8 +41,9 @@ async def evaluate_query(
     question: str,
     ground_truth: str,
     retriever: Retriever = Depends(get_retriever),
+    admin: CurrentUser = Depends(require_admin),
 ) -> dict:
-    """评测单条查询"""
+    """评测单条查询（仅管理员，全量权限）"""
     from src.evaluation.evaluator import TestCase
 
     evaluator = get_evaluator()
@@ -50,7 +53,7 @@ async def evaluate_query(
         question=question,
         ground_truth_answer=ground_truth,
     )
-    result = evaluator.evaluate_query(test_case)
+    result = evaluator.evaluate_query(test_case, access_level="vip")
 
     return {
         "question": result.question,

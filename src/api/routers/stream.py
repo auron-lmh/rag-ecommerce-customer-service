@@ -11,7 +11,8 @@ from collections.abc import AsyncGenerator
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
-from src.api.deps import get_retriever
+from src.api.auth import CurrentUser
+from src.api.deps import get_current_user, get_retriever
 from src.conversation import (
     Message,
     get_retrieval_judge,
@@ -35,23 +36,27 @@ async def chat_stream(
     top_k: int = Query(default=5, ge=1, le=20),
     use_reranker: bool = Query(default=True),
     retriever: Retriever = Depends(get_retriever),
+    current_user: CurrentUser = Depends(get_current_user),
 ):
-    """流式客服对话 — SSE 输出
+    """流式客服对话 — SSE 输出（需要登录，按用户 access_level 过滤知识范围）
 
     流程:
       1. 意图分类
       2. 智能重检索判断（多轮对话时）
-      3. 多级降级检索
+      3. 多级降级检索（按用户等级过滤）
       4. 流式生成回答
     """
+    # 模块13: 会话按用户隔离
+    sid = f"{current_user.username}:{session_id}"
+
     session_manager = get_session_manager()
     streaming_gen = get_streaming_generator()
     retrieval_judge = get_retrieval_judge()
 
     # 获取会话历史
-    session = session_manager.get_session(session_id)
+    session = session_manager.get_session(sid)
     if not session:
-        session = session_manager.create_session(session_id)
+        session = session_manager.create_session(sid)
 
     history = [{"role": m.role, "content": m.content} for m in session.messages[-6:]]
 
@@ -84,7 +89,7 @@ async def chat_stream(
     # 如"那需要运费吗"→"退货需要运费吗"、"上次那个券"→"满300减50券"）
     retrieval_query = route_result.rewritten_query
     if not emotion_escalate:
-        memory_context = get_session_memory(session_id).build_context(safe_query)
+        memory_context = get_session_memory(sid).build_context(safe_query)
         if history or memory_context:
             retrieval_query = get_coreference_resolver().resolve(
                 route_result.rewritten_query, history, memory_context
@@ -130,6 +135,7 @@ async def chat_stream(
                 secondary_query=retrieval_query,
                 top_k=top_k,
                 use_rerank=use_reranker,
+                access_level=current_user.access_level,
             )
             docs = [r.text for r in degradation_result.response.results]
             sources = [r.source_file for r in degradation_result.response.results]
@@ -151,9 +157,9 @@ async def chat_stream(
                     full_response += event.data
                     yield f"data: {json.dumps({'event': 'token', 'data': event.data})}\n\n"
                 elif event.event == "done":
-                    # 保存到会话历史
+                    # 保存到会话历史（命名空间 sid，按用户隔离）
                     session_manager.add_message(
-                        session_id,
+                        sid,
                         Message(
                             role="user",
                             content=query,
@@ -161,16 +167,16 @@ async def chat_stream(
                         ),
                     )
                     session_manager.add_message(
-                        session_id,
+                        sid,
                         Message(
                             role="assistant", content=full_response, sources=sources
                         ),
                     )
                     # 三层记忆: 记录本轮（抽实体 + 更新滚动摘要）
                     try:
-                        get_session_memory(session_id).record_turn(query, full_response)
+                        get_session_memory(sid).record_turn(query, full_response)
                     except Exception:
-                        logger.warning("记录会话记忆失败: %s", session_id)
+                        logger.warning("记录会话记忆失败: %s", sid)
                     yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"
                 elif event.event == "error":
                     yield f"data: {json.dumps({'event': 'error', 'data': event.data})}\n\n"

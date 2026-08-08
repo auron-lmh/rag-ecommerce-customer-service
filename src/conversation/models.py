@@ -25,6 +25,9 @@ class ConversationSession:
     created_at: datetime = field(default_factory=datetime.now)
     last_active: datetime = field(default_factory=datetime.now)
     metadata: dict = field(default_factory=dict)
+    user_id: str = (
+        ""  # 模块13 会话归属用户（路由层用 "{username}:{session_id}" 命名空间隔离）
+    )
 
     @property
     def turn_count(self) -> int:

@@ -18,7 +18,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routers import chat, evaluate, query, stats, stream, upload
+from src.api.routers import auth, chat, evaluate, query, stats, stream, upload
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -42,15 +42,17 @@ def create_app() -> FastAPI:
     )
 
     # ── CORS ──
+    # 模块13: 收紧到白名单（"*" + credentials 是无效组合，浏览器会拒收凭据）
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
     # ── 注册路由 ──
+    app.include_router(auth.router)
     app.include_router(query.router)
     app.include_router(upload.router)
     app.include_router(stats.router)

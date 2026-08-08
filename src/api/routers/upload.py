@@ -5,7 +5,8 @@ import time
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from src.api.deps import get_pipeline, get_store
+from src.api.auth import CurrentUser
+from src.api.deps import get_pipeline, get_store, require_admin
 from src.api.models import UploadRequest, UploadResponse
 from src.embedding.milvus_store import MilvusStore
 from src.embedding.pipeline import IndexingPipeline
@@ -20,8 +21,9 @@ router = APIRouter(prefix="/api", tags=["上传"])
 async def upload_by_path(
     req: UploadRequest,
     pipeline: IndexingPipeline = Depends(get_pipeline),
+    admin: CurrentUser = Depends(require_admin),
 ) -> UploadResponse:
-    """通过文件路径上传 — 解析 → 分块 → 向量化 → 入库
+    """通过文件路径上传 — 解析 → 分块 → 向量化 → 入库（仅管理员）
 
     适用于本地文件或 URL。
     """
@@ -54,11 +56,12 @@ async def upload_by_path(
             elapsed_seconds=round(time.time() - t0, 1),
         )
 
-    # 政策时效元数据（改进4）
+    # 政策时效元数据（改进4）+ 模块13 内容权限标签
     doc_metadata = {
         "version": req.version,
         "effective_from": req.effective_from,
         "effective_to": req.effective_to,
+        "access_level": req.access_level,
     }
 
     result = pipeline.run_from_text(
@@ -87,10 +90,12 @@ async def upload_file(
     version: str | None = Form(None),
     effective_from: str | None = Form(None),
     effective_to: str | None = Form(None),
+    access_level: str = Form("public"),
     pipeline: IndexingPipeline = Depends(get_pipeline),
     store: MilvusStore = Depends(get_store),
+    admin: CurrentUser = Depends(require_admin),
 ) -> UploadResponse:
-    """通过文件上传 — multipart/form-data
+    """通过文件上传 — multipart/form-data（仅管理员）
 
     适用于前端直接上传文件。
     """
@@ -121,11 +126,12 @@ async def upload_file(
             elapsed_seconds=round(time.time() - t0, 1),
         )
 
-    # 政策时效元数据（改进4）
+    # 政策时效元数据（改进4）+ 模块13 内容权限标签
     doc_metadata = {
         "version": version,
         "effective_from": effective_from,
         "effective_to": effective_to,
+        "access_level": access_level,
     }
 
     # 修复 (P0): source_file 用"内容哈希_文件名"唯一化，避免同名文档互相删向量
@@ -158,7 +164,8 @@ async def upload_file(
 async def delete_document(
     source_file: str,
     store: MilvusStore = Depends(get_store),
+    admin: CurrentUser = Depends(require_admin),
 ) -> dict:
-    """按来源文件名删除文档的所有 chunk"""
+    """按来源文件名删除文档的所有 chunk（仅管理员）"""
     deleted = store.delete_by_source(source_file)
     return {"deleted": deleted, "source_file": source_file}

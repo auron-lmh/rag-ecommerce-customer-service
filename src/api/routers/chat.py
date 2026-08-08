@@ -6,8 +6,10 @@ LangGraph 图编排 + 意图路由 + 多级降级检索 + 幻觉检测自纠正 
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from src.api.auth import CurrentUser
+from src.api.deps import get_current_user
 from src.api.models import ChatRequest, ChatResponse, SearchResultItem
 from src.config import settings
 from src.conversation import Message, get_session_manager, get_session_memory
@@ -20,17 +22,23 @@ router = APIRouter(prefix="/api", tags=["对话"])
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
-    """智能客服对话 — LangGraph 图编排
+async def chat(
+    req: ChatRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> ChatResponse:
+    """智能客服对话 — LangGraph 图编排（需要登录，按用户 access_level 过滤知识范围）
 
     流程:
       0. PII 脱敏（入口安全: 手机号/身份证/银行卡等自动替换）
       1. 意图分类 (LLM Function Calling)
       2. 人工介入判断（退款/投诉/敏感话题）
       3. 路由决策 (RAG / SQL / 直接回复 / 转人工)
-      4. 多级降级检索 (Level 1→2→3→4)
+      4. 多级降级检索 (Level 1→2→3→4, 按用户等级过滤)
       5. 幻觉检测 + 自纠正闭环 (最多2轮)
     """
+    # ── 模块13: 会话按用户隔离（用户 A 永远只能触达 "{username}:" 前缀的 key）──
+    sid = f"{current_user.username}:{req.session_id}"
+
     # ── 第0步: PII 脱敏 ──
     redactor = get_pii_redactor()
     safe_query, pii_found = redactor.redact(req.query)
@@ -45,22 +53,23 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     # ── 多轮对话: 加载会话历史（指代消解用）──
     session_manager = get_session_manager()
-    session = session_manager.get_session(req.session_id)
+    session = session_manager.get_session(sid)
     if not session:
-        session = session_manager.create_session(req.session_id)
+        session = session_manager.create_session(sid)
     history = [{"role": m.role, "content": m.content} for m in session.messages[-6:]]
 
     # 三层记忆: 组装"最小有用上下文"（实体ledger/滚动摘要/历史片段）
-    memory_context = get_session_memory(req.session_id).build_context(safe_query)
+    memory_context = get_session_memory(sid).build_context(safe_query)
 
     try:
         result = workflow.run(
             query=safe_query,
-            session_id=req.session_id,
+            session_id=sid,
             top_k=req.top_k,
             use_reranker=req.use_reranker,
             history=history,
             memory_context=memory_context,
+            access_level=current_user.access_level,
         )
     except Exception:
         logger.exception("对话工作流执行失败: query=%s", safe_query[:100])
@@ -70,10 +79,10 @@ async def chat(req: ChatRequest) -> ChatResponse:
             "error": "workflow_execution_failed",
         }
 
-    # ── 多轮对话: 保存本轮消息到会话历史 ──
+    # ── 多轮对话: 保存本轮消息到会话历史（用命名空间 sid，按用户隔离）──
     try:
         session_manager.add_message(
-            req.session_id,
+            sid,
             Message(
                 role="user",
                 content=safe_query,
@@ -81,7 +90,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
             ),
         )
         session_manager.add_message(
-            req.session_id,
+            sid,
             Message(
                 role="assistant",
                 content=result.get("answer", ""),
@@ -92,15 +101,13 @@ async def chat(req: ChatRequest) -> ChatResponse:
             ),
         )
     except Exception:
-        logger.warning("保存会话历史失败: %s", req.session_id)
+        logger.warning("保存会话历史失败: %s", sid)
 
     # 三层记忆: 记录本轮（抽实体 + 更新滚动摘要）
     try:
-        get_session_memory(req.session_id).record_turn(
-            safe_query, result.get("answer", "")
-        )
+        get_session_memory(sid).record_turn(safe_query, result.get("answer", ""))
     except Exception:
-        logger.warning("记录会话记忆失败: %s", req.session_id)
+        logger.warning("记录会话记忆失败: %s", sid)
 
     # 成本监控: 记录本次查询（token 数按长度粗略估算，成本用官方价格折算）
     try:
@@ -129,7 +136,7 @@ async def chat(req: ChatRequest) -> ChatResponse:
                 ),
                 total_time_ms=result.get("search_time_ms", 0),
                 final_answer_length=len(_answer),
-                session_id=req.session_id,
+                session_id=sid,
                 model_used=settings.default_model,
             )
         )

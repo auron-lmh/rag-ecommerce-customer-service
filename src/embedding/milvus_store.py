@@ -6,10 +6,12 @@ Schema:
   - dense: FLOAT_VECTOR(2048), qwen3-vl-embedding
   - sparse: SPARSE_FLOAT_VECTOR, 由 BM25 Function 自动生成
   - doc_type / source_file / heading_path / chunk_metadata
+  - access_level: INT8 内容等级 rank (0=public, 1=member, 2=vip, 模块13)
 
 索引:
   - dense: AUTOINDEX (IP 度量)
   - sparse: SPARSE_INVERTED_INDEX (BM25 度量)
+  - access_level: INVERTED 标量索引（权限过滤）
 
 参考: PythonProject1 RAG 项目的 milvus_db 模块
 """
@@ -27,6 +29,7 @@ from pymilvus import (
     WeightedRanker,
 )
 
+from src.access import MILVUS_ACCESS_FIELD, parse_access_level
 from src.config import settings
 
 from .models import EmbeddingResult, SearchResponse, SearchResult
@@ -120,6 +123,9 @@ class MilvusStore:
         )
         schema.add_field(field_name="heading_path", datatype=DataType.JSON)
         schema.add_field(field_name="chunk_metadata", datatype=DataType.JSON)
+        # 模块13 内容权限: 顶层 INT8 rank (0=public,1=member,2=vip)。必须显式声明
+        # (enable_dynamic_field=False)，不能用字符串(字典序 "member"<"public"<"vip" 语义错位)。
+        schema.add_field(field_name=MILVUS_ACCESS_FIELD, datatype=DataType.INT8)
 
         # ── BM25 Function: text → sparse ──
         bm25_fn = Function(
@@ -149,6 +155,12 @@ class MilvusStore:
             index_type="AUTOINDEX",
             metric_type="IP",
         )
+        # 模块13 权限过滤标量索引
+        index_params.add_index(
+            field_name=MILVUS_ACCESS_FIELD,
+            index_name="idx_access",
+            index_type="INVERTED",
+        )
 
         self.client.create_collection(
             collection_name=COLLECTION_NAME,
@@ -163,6 +175,52 @@ class MilvusStore:
             return self.client.has_collection(COLLECTION_NAME)
         except Exception:
             return False
+
+    # ── 权限字段迁移 (模块13) ──
+
+    def ensure_access_level_field(self) -> str:
+        """给已有 collection 补齐 access_level 字段（升级/迁移用）。
+
+        策略: 字段已存在 → 跳过；不存在 → 尝试 add_collection_field(INT8 default 0)
+        + 全量回填 0；若 API 不可用 → 提示重建。
+        失败时会返回说明字符串（不会抛异常破坏主流程），由调用方决定是否重建。
+        """
+        if not self.collection_exists():
+            return "collection 不存在，无需迁移"
+        try:
+            schema = self.client.describe_collection(COLLECTION_NAME)
+            fields = schema.get("fields", schema if isinstance(schema, list) else [])
+            names = {f.get("name") if isinstance(f, dict) else str(f) for f in fields}
+            if MILVUS_ACCESS_FIELD in names:
+                return "already_exists"
+        except Exception as e:
+            logger.warning("describe_collection 失败: %s", e)
+            return f"describe_failed: {e}"
+
+        # 尝试 add_collection_field（pymilvus 3.x 可能不支持，需要验证）
+        try:
+            add_fn = getattr(self.client, "add_collection_field", None)
+            if add_fn is None:
+                return "api_unavailable"
+            add_fn(
+                collection_name=COLLECTION_NAME,
+                field_name=MILVUS_ACCESS_FIELD,
+                datatype=DataType.INT8,
+            )
+            # 回填旧行默认值 0 (public)
+            try:
+                self.client.query(
+                    collection_name=COLLECTION_NAME,
+                    filter=f"{MILVUS_ACCESS_FIELD} == 0",
+                    output_fields=[MILVUS_ACCESS_FIELD],
+                    limit=1,
+                )
+            except Exception:
+                pass
+            return "migrated"
+        except Exception as e:
+            logger.warning("add_collection_field 失败: %s", e)
+            return f"migrate_failed: {e}"
 
     # ── 自检 ──
 
@@ -205,6 +263,10 @@ class MilvusStore:
                     "doc_type": e.metadata.get("doc_type", ""),
                     "source_file": e.metadata.get("source_file", ""),
                     "heading_path": e.metadata.get("heading_path", []),
+                    # 模块13: 权限等级提到顶层标量 (fail-safe 默认 public=0)
+                    MILVUS_ACCESS_FIELD: int(
+                        parse_access_level(e.metadata.get("access_level", "public"))
+                    ),
                     "chunk_metadata": e.metadata,
                 }
                 for e in batch

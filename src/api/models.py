@@ -2,6 +2,16 @@
 
 from pydantic import BaseModel, Field
 
+# ── 鉴权 (模块13) ──
+
+
+class LoginRequest(BaseModel):
+    """登录请求"""
+
+    username: str = Field(..., min_length=1, max_length=64, description="用户名")
+    password: str = Field(..., min_length=1, max_length=128, description="密码")
+
+
 # ── 查询 ──
 
 
@@ -56,6 +66,10 @@ class UploadRequest(BaseModel):
     )
     effective_to: str | None = Field(
         None, description="过期日期 YYYY-MM-DD（留空=永不过期）"
+    )
+    # 模块13 内容权限: 入库时给文档打权限标签（public/member/vip）
+    access_level: str = Field(
+        "public", description="内容等级 public/member/vip（普通用户默认只能看 public）"
     )
 
 

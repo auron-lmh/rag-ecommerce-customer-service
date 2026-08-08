@@ -76,6 +76,7 @@ class SelfCorrector:
         use_rerank: bool = True,
         max_rounds: int = MAX_CORRECTION_ROUNDS,
         faithfulness_threshold: float = 0.8,
+        access_level: str = "public",
     ) -> GenerationResult:
         """带自纠正的生成（包含初始检索，适合独立调用）
 
@@ -85,6 +86,7 @@ class SelfCorrector:
             use_rerank: 是否启用 Reranker
             max_rounds: 最大纠正轮数
             faithfulness_threshold: 忠实度阈值
+            access_level: 模块13 内容权限等级，透传给初始检索 + 纠正循环重新检索
 
         Returns:
             GenerationResult
@@ -94,6 +96,7 @@ class SelfCorrector:
             query=query,
             top_k=top_k,
             use_rerank=use_rerank,
+            access_level=access_level,
         )
         docs = [r.text for r in search_response.results]
         sources = [r.source_file for r in search_response.results]
@@ -107,6 +110,7 @@ class SelfCorrector:
             use_rerank=use_rerank,
             max_rounds=max_rounds,
             faithfulness_threshold=faithfulness_threshold,
+            access_level=access_level,
         )
 
     def generate_with_docs(
@@ -118,6 +122,7 @@ class SelfCorrector:
         use_rerank: bool = True,
         max_rounds: int = MAX_CORRECTION_ROUNDS,
         faithfulness_threshold: float = 0.8,
+        access_level: str = "public",
     ) -> GenerationResult:
         """基于已有文档生成回答（供 LangGraph workflow 调用，跳过初始检索）
 
@@ -129,6 +134,8 @@ class SelfCorrector:
             use_rerank: 是否启用 Reranker
             max_rounds: 最大纠正轮数
             faithfulness_threshold: 忠实度阈值
+            access_level: 模块13 内容权限等级，透传给纠正循环重新检索
+                          ★workflow 空 docs 兜底会触发这里再检索，漏传=受限用户无过滤重搜
 
         Returns:
             GenerationResult
@@ -187,6 +194,7 @@ class SelfCorrector:
                 query=refined_query,
                 top_k=top_k,
                 use_rerank=use_rerank,
+                access_level=access_level,
             )
 
             # 合并文档（去重）

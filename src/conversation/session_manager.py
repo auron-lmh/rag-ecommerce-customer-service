@@ -63,23 +63,38 @@ class SessionManager:
                     FOREIGN KEY (session_id) REFERENCES conversations(session_id)
                 )
             """)
-            conn.commit()
+            # 模块13: 旧库升级 — 补 user_id 列（try/except 防呆：已存在则跳过）
+            try:
+                conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN user_id TEXT DEFAULT ''"
+                )
+                conn.commit()
+                logger.info("conversations 表已迁移: 新增 user_id 列")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
 
-    def create_session(self, session_id: Optional[str] = None) -> ConversationSession:
+    def create_session(
+        self, session_id: Optional[str] = None, user_id: str = ""
+    ) -> ConversationSession:
         """创建新会话"""
         sid = session_id or str(uuid.uuid4())[:8]
-        session = ConversationSession(session_id=sid)
+        session = ConversationSession(session_id=sid, user_id=user_id)
         self._sessions[sid] = session
 
         # 持久化到 SQLite
         with sqlite3.connect(self._db_path) as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO conversations (session_id, created_at, last_active) VALUES (?, ?, ?)",
-                (sid, session.created_at.isoformat(), session.last_active.isoformat()),
+                "INSERT OR REPLACE INTO conversations (session_id, created_at, last_active, user_id) VALUES (?, ?, ?, ?)",
+                (
+                    sid,
+                    session.created_at.isoformat(),
+                    session.last_active.isoformat(),
+                    user_id,
+                ),
             )
             conn.commit()
 
-        logger.info("创建会话: %s", sid)
+        logger.info("创建会话: %s (user=%s)", sid, user_id or "unknown")
         return session
 
     def get_session(self, session_id: str) -> Optional[ConversationSession]:
@@ -105,6 +120,7 @@ class SessionManager:
                 session_id=session_id,
                 created_at=datetime.fromisoformat(row["created_at"]),
                 last_active=datetime.fromisoformat(row["last_active"]),
+                user_id=row["user_id"] if "user_id" in row.keys() else "",
             )
 
             # 加载消息

@@ -16,8 +16,10 @@ NOT os.getenv() —— 后者在类定义时求值，此时 .env 尚未加载。
   Reranker:   qwen3-vl-rerank (可选，未变更)
 """
 
+import json
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -117,6 +119,48 @@ class Settings(BaseSettings):
     # ========== 服务 ==========
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+
+    # ========== 鉴权 (JWT, 模块13) ==========
+    jwt_secret: str = (
+        "dev-secret-change-me-0123456789abcdef0123456789abcdef"  # 生产必须用 .env 覆盖
+    )
+    jwt_algorithm: str = "HS256"
+    token_expire_minutes: int = 720  # 12 小时
+    # demo 用户: {"username": {"password": "...", "role": "...", "access_level": "..."}}
+    # .env 里用 JSON 字符串覆盖 (DEMO_USERS={"admin":{"password":"...",...}})
+    demo_users: dict = {
+        "admin": {"password": "admin123", "role": "admin", "access_level": "vip"},
+        "vip": {"password": "vip123", "role": "vip", "access_level": "vip"},
+        "member": {"password": "member123", "role": "member", "access_level": "member"},
+        "normal": {"password": "normal123", "role": "normal", "access_level": "public"},
+    }
+
+    @field_validator("demo_users", mode="before")
+    @classmethod
+    def _parse_demo_users(cls, v):
+        """支持 .env 里 JSON 字符串形式的 DEMO_USERS"""
+        if isinstance(v, str):
+            v = v.strip()
+            if v:
+                return json.loads(v)
+        return v
+
+    # ========== CORS ==========
+    cors_origins: list = [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:7860",  # gradio 知识库入库平台
+        "http://localhost:7861",  # gradio 客户聊天
+        "http://localhost:7862",  # gradio 管理员控制台
+    ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, v):
+        """支持 .env 里逗号分隔字符串 CORS_ORIGINS"""
+        if isinstance(v, str):
+            return [x.strip() for x in v.split(",") if x.strip()]
+        return v
 
     # ========== 路径 ==========
     data_dir: Path = PROJECT_ROOT / "data"

@@ -113,13 +113,17 @@ class RetrievalEvaluator:
         return self._retriever
 
     def evaluate_query(
-        self, test_case: TestCase, use_llm_eval: bool = False
+        self,
+        test_case: TestCase,
+        use_llm_eval: bool = False,
+        access_level: str = "vip",
     ) -> EvalResult:
         """评测单条查询（仅检索，不生成）
 
         Args:
             test_case: 测试用例
             use_llm_eval: 是否使用 LLM 评估忠实度（默认 False 用快速模式）
+            access_level: 模块13 内容权限等级。评测面向完整知识库，默认 vip(全量)
 
         Returns:
             EvalResult
@@ -131,6 +135,7 @@ class RetrievalEvaluator:
             query=test_case.question,
             top_k=5,
             use_rerank=True,
+            access_level=access_level,
         )
         latency_ms = (time.time() - t0) * 1000
 
@@ -173,7 +178,10 @@ class RetrievalEvaluator:
         )
 
     def evaluate_query_with_generation(
-        self, test_case: TestCase, use_llm_eval: bool = False
+        self,
+        test_case: TestCase,
+        use_llm_eval: bool = False,
+        access_level: str = "vip",
     ) -> EvalResult:
         """评测单条查询（完整 RAG 流程：检索 + 生成）
 
@@ -182,6 +190,7 @@ class RetrievalEvaluator:
         Args:
             test_case: 测试用例
             use_llm_eval: 是否使用 LLM 评估忠实度
+            access_level: 模块13 内容权限等级。评测面向完整知识库，默认 vip(全量)
 
         Returns:
             EvalResult
@@ -194,6 +203,7 @@ class RetrievalEvaluator:
             query=test_case.question,
             top_k=5,
             use_rerank=True,
+            access_level=access_level,
         )
         retrieved_docs = [r.text for r in search_response.results]
 
@@ -206,6 +216,7 @@ class RetrievalEvaluator:
             query=test_case.question,
             top_k=5,
             use_rerank=True,
+            access_level=access_level,
         )
         latency_ms = (time.time() - t0) * 1000
 

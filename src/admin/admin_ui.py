@@ -25,6 +25,10 @@ import os
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://rag-api:8000")
 
+# 模块13: 管理端用 admin 账号登录 API（在 api_auth 首次导入前设好 env 默认）
+os.environ.setdefault("API_USERNAME", "admin")
+os.environ.setdefault("API_PASSWORD", "admin123")
+
 # 人工介入数据库
 HITL_DB = Path(__file__).parent.parent.parent / "data" / "hitl_requests.db"
 
@@ -166,7 +170,13 @@ def format_conversation(messages: list[dict]) -> str:
 def get_system_stats() -> dict:
     """获取系统统计"""
     try:
-        resp = requests.get(f"{API_BASE_URL}/api/stats/daily", timeout=5)
+        from src.admin.api_auth import auth_headers
+
+        resp = requests.get(
+            f"{API_BASE_URL}/api/stats/daily",
+            headers=auth_headers(),
+            timeout=5,
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -351,7 +361,13 @@ def create_admin_ui() -> gr.Blocks:
 
                 def check_health():
                     try:
-                        resp = requests.get(f"{API_BASE_URL}/api/health", timeout=5)
+                        from src.admin.api_auth import auth_headers
+
+                        resp = requests.get(
+                            f"{API_BASE_URL}/api/health",
+                            headers=auth_headers(),
+                            timeout=5,
+                        )
                         resp.raise_for_status()
                         return json.dumps(resp.json(), indent=2, ensure_ascii=False)
                     except Exception as e:
@@ -359,7 +375,13 @@ def create_admin_ui() -> gr.Blocks:
 
                 def clear_cache():
                     try:
-                        resp = requests.delete(f"{API_BASE_URL}/api/cache", timeout=5)
+                        from src.admin.api_auth import auth_headers
+
+                        resp = requests.delete(
+                            f"{API_BASE_URL}/api/cache",
+                            headers=auth_headers(),
+                            timeout=5,
+                        )
                         resp.raise_for_status()
                         return "✅ 缓存已清空"
                     except Exception as e:

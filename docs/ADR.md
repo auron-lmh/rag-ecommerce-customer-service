@@ -67,3 +67,17 @@
 - **为什么**：qwen2.5 多模态、2048 维兼容既有 Milvus collection（避免重建）；支持文本+图片统一向量空间。
 - **替代方案**：换本地确定性模型（bge-m3，需大改+重灌）、text-embedding-v3（维度不同）。
 - **后果**：每 API 调用限 1 个 input（qwen2.5 不支持批量，批量 20→1）；需保证索引与查询同模型同维度。
+
+## ADR-009：内容级权限隔离 —— JWT 鉴权 + 层级 access_level（模块13）
+
+- **决策**：① 鉴权用 JWT（`/api/auth/login` 签发，`get_current_user`/`require_admin` 依赖，身份只信 header 不放 body）；② 内容隔离用层级 `access_level: public(0) < member(1) < vip(2)`，入库打标签、检索 `access_level <= 用户等级` 过滤，缓存 key 含等级。
+- **背景**：原系统无任何鉴权，普通用户与 VIP 用户看到的知识范围完全相同——多租户/权限隔离是 RAG 生产化必答考点。
+- **为什么**：① 等级比较必须用 **INT8 整数**（字符串字典序 `"member"<"public"<"vip"` 语义错位，`access_level <= "member"` 会错误排除 public）；② 所有检索调用点默认 `public`（fail-safe 最低权限），漏传=只返回公开内容，永不泄漏；③ 缓存 key 必须含 access_level，否则 VIP 用户的检索结果（含全文）被低权限用户命中缓存=直接泄漏；④ 双路召回/多级降级/自纠正重搜/工作流空 docs 兜底必须逐层透传，任何一层漏掉都是泄漏路径。
+- **替代方案**：role 标签列表（配置复杂）、retrieval 后 Python 过滤（越权内容仍进召回集/rerank/缓存，不彻底）。
+- **后果**：新 collection 需含 `access_level` 顶层字段（INT8 + INVERTED 索引）；已有 collection 用 `ensure_access_level_field()` 补字段回填 0 或 `recreate_collection=True` 重灌；检索链路 7 个调用点需统一带 access_level；JWT 生产必须换长随机 secret。
+
+### 迁移 runbook（已有数据升级到模块13）
+1. **Milvus**：新库直接用 `create_collection`；旧库调 `MilvusStore().ensure_access_level_field()`（补 INT8 字段 + 回填 0=public），或一次性 `recreate_collection=True` 重灌（`scripts/rebuild_kb.py`）。重灌前旧文档默认 public，管理面重新上传 VIP 文档时显式传 `access_level=vip`。
+2. **SQLite**（conversations.db）：`SessionManager._init_db` 自动 `ALTER TABLE conversations ADD COLUMN user_id`，防呆幂等，无需手工。
+3. **旧检索缓存**：cache key 结构新增 access_level 段 → 旧 key 自然失效，无需手动清理。
+4. **.env**：必须设置 `JWT_SECRET`（≥32 字节随机串）；demo 用户用 `DEMO_USERS` JSON 覆盖；CORS 用 `CORS_ORIGINS` 白名单。

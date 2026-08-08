@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Optional
 
+from src.access import level_name, parse_access_level
 from src.chunking.models import Chunk, ChunkResult
 from src.chunking.router import chunk_document
 from src.config import settings
@@ -144,6 +145,14 @@ class IndexingPipeline:
                 for k, v in doc_metadata.items():
                     if v is not None:
                         meta[k] = v
+
+        # 模块13 内容权限: access_level 规范化为 int rank（Milvus 顶层标量），
+        # 可读名保留在 label 供调试/展示。非法值 fail-safe 回退 public(0)。
+        for meta in metadata_list:
+            label = str(meta.get("access_level", "public"))
+            rank = parse_access_level(label)
+            meta["access_level"] = rank
+            meta["access_level_label"] = level_name(rank)
 
         for meta in metadata_list:
             meta["content_hash"] = content_hash

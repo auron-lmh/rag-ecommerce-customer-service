@@ -4,7 +4,8 @@ import logging
 
 from fastapi import APIRouter, Depends
 
-from src.api.deps import get_retriever
+from src.api.auth import CurrentUser
+from src.api.deps import get_current_user, get_retriever
 from src.api.models import QueryRequest, QueryResponse, SearchResultItem
 from src.embedding.retriever import Retriever
 
@@ -17,8 +18,9 @@ router = APIRouter(prefix="/api", tags=["查询"])
 async def query(
     req: QueryRequest,
     retriever: Retriever = Depends(get_retriever),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> QueryResponse:
-    """语义检索 — Hybrid Search + Reranker
+    """语义检索 — Hybrid Search + Reranker（需要登录，按用户 access_level 过滤知识范围）
 
     流程: query → Embedder → Milvus Hybrid Search → (可选) Reranker → 返回
     """
@@ -35,6 +37,8 @@ async def query(
         filter_by_doc_type=req.filter_doc_type,
         filter_by_source=req.filter_source,
         threshold=req.threshold,
+        # 模块13: 按当前用户等级过滤（access_level <= 用户等级才可见）
+        access_level=current_user.access_level,
     )
 
     return QueryResponse(

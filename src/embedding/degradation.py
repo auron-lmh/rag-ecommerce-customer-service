@@ -87,6 +87,7 @@ class DegradationStrategy:
         threshold: float = SIMILARITY_THRESHOLD,
         use_rerank: bool = True,
         secondary_query: str | None = None,
+        access_level: str = "public",
     ) -> DegradationResult:
         """带降级的检索（Level 1 支持双路召回）
 
@@ -97,6 +98,7 @@ class DegradationStrategy:
             use_rerank: 是否启用 Reranker
             secondary_query: 改写后问题（提供时 Level 1 走双路召回，
                              原始+改写并行合并去重；不提供则退化为单路）
+            access_level: 模块13 内容权限等级，透传给各级检索（Level 0-3）
 
         Returns:
             DegradationResult
@@ -106,7 +108,9 @@ class DegradationStrategy:
         # 行业实践（Question Decomposition for RAG）: 单查询对复合问题会"夹在概念之间"，
         # 拆分子查询并行检索 + 汇总，MRR@10 +36.7%。
         if _is_complex_query(query):
-            decomposed = self._expand_and_search(query, top_k)
+            decomposed = self._expand_and_search(
+                query, top_k, access_level=access_level
+            )
             if decomposed.results and self._is_sufficient(decomposed, threshold):
                 if use_rerank and self.retriever.reranker:
                     try:
@@ -137,12 +141,14 @@ class DegradationStrategy:
                 secondary_query=secondary_query,
                 top_k=top_k,
                 use_rerank=use_rerank,
+                access_level=access_level,
             )
         else:
             response = self.retriever.search(
                 query=query,
                 top_k=top_k,
                 use_rerank=use_rerank,
+                access_level=access_level,
             )
 
         if self._is_sufficient(response, threshold):
@@ -173,6 +179,7 @@ class DegradationStrategy:
                 query=rewritten,
                 top_k=top_k,
                 use_rerank=use_rerank,
+                access_level=access_level,
             )
             new_score = self._max_score(new_response)
 
@@ -198,7 +205,9 @@ class DegradationStrategy:
 
         # ── Level 3: 查询扩展 (Multi-Query + HyDE) ──
         logger.info("Level 3 尝试查询扩展: %s", query[:50])
-        expanded_response = self._expand_and_search(query, top_k)
+        expanded_response = self._expand_and_search(
+            query, top_k, access_level=access_level
+        )
         expanded_score = self._max_score(expanded_response)
         if expanded_score > best_score + IMPROVEMENT_THRESHOLD:
             best_response = expanded_response
@@ -300,11 +309,16 @@ class DegradationStrategy:
             logger.warning("查询改写失败: %s", e)
             return query
 
-    def _expand_and_search(self, query: str, top_k: int) -> SearchResponse:
+    def _expand_and_search(
+        self, query: str, top_k: int, access_level: str = "public"
+    ) -> SearchResponse:
         """查询扩展 + 并行检索 + 合并结果
 
         使用 Multi-Query 扩展，对每个子查询**并发**检索（ThreadPool，网络I/O 并行），
         合并去重后返回最佳结果。子问题上限由 QueryExpander 控制（3~5 个）。
+
+        Args:
+            access_level: 模块13 内容权限等级，透传给子查询 + HyDE 检索
         """
         from .query_expansion import get_query_expander
 
@@ -325,6 +339,7 @@ class DegradationStrategy:
                     query=q,
                     top_k=top_k,
                     use_rerank=False,  # 子查询不重排序，最后统一排序
+                    access_level=access_level,
                 )
                 for q in queries
             ]
@@ -341,6 +356,7 @@ class DegradationStrategy:
                     query=hyde_doc,
                     top_k=top_k,
                     use_rerank=False,
+                    access_level=access_level,
                 )
                 all_results.extend(hyde_response.results)
             except Exception as e:
