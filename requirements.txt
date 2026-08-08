@@ -37,6 +37,7 @@ tenacity>=9.0.0
 
 # 安全
 slowapi>=0.1.0
+PyJWT>=2.8.0  # 模块33 JWT 鉴权
 
 # 管理后台
 gradio>=5.0.0
