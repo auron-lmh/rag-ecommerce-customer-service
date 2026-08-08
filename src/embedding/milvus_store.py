@@ -320,17 +320,21 @@ class MilvusStore:
         t0 = time.time()
         self._ensure_ready()
 
+        # 修复(模块33): Milvus hybrid_search 的**顶层 filter 会被忽略**（实测不生效），
+        # 必须把过滤表达式传给每个 AnnSearchRequest 的 filter 参数，否则权限过滤失效。
         dense_req = AnnSearchRequest(
             [query_vector],
             DENSE_FIELD,
             {"metric_type": "IP", "params": {"nprobe": 16}},
             limit=top_k,
+            filter=filter_expr,
         )
         sparse_req = AnnSearchRequest(
             [query_text],
             SPARSE_FIELD,
             {"metric_type": "BM25", "params": {"drop_ratio_search": 0.2}},
             limit=top_k,
+            filter=filter_expr,
         )
         ranker = WeightedRanker(sparse_weight, dense_weight)
 
