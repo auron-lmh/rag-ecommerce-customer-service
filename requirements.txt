@@ -33,6 +33,7 @@ pydantic-settings>=2.0.0
 python-dotenv>=1.0.0
 structlog>=24.0.0
 pillow>=11.0.0
+PyMySQL>=1.1.0  # 订单/物流查询 copilot MySQL
 tenacity>=9.0.0
 
 # 安全
