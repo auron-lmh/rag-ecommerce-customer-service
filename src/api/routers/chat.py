@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, Depends
 
+from src.access import is_admin
 from src.api.auth import CurrentUser
 from src.api.deps import get_current_user
 from src.api.models import ChatRequest, ChatResponse, SearchResultItem
@@ -70,6 +71,9 @@ async def chat(
             history=history,
             memory_context=memory_context,
             access_level=current_user.access_level,
+            # 修复(审查): 订单查询按用户隔离，防枚举单号越权
+            user_id=current_user.seed_user_id,
+            is_admin=is_admin(current_user.role),
         )
     except Exception:
         logger.exception("对话工作流执行失败: query=%s", safe_query[:100])
@@ -143,6 +147,14 @@ async def chat(
     except Exception as e:
         logger.warning("成本监控记录失败: %s", e)
 
+    # 修复(审查): 评估不通过(忠实度低/检索降级/诚实兜底)应上抛人工核验标志，
+    # 否则"无法确认"类低质量答案被静默返回，绕过"高敏承诺需 ≥0.85 否则转人工"的护栏。
+    needs_human = result.get("needs_human", False)
+    human_reason = result.get("human_reason", "")
+    if not needs_human and result.get("evaluation_passed") is False:
+        needs_human = True
+        human_reason = human_reason or "回答质量评估未通过，建议人工核验"
+
     # 构建响应
     response = ChatResponse(
         query=result.get("query", req.query),
@@ -168,8 +180,8 @@ async def chat(
         faithfulness=result.get("faithfulness", 0.0),
         correction_rounds=result.get("correction_rounds", 0),
         was_corrected=result.get("was_corrected", False),
-        needs_human=result.get("needs_human", False),
-        human_reason=result.get("human_reason", ""),
+        needs_human=needs_human,
+        human_reason=human_reason,
         human_priority=result.get("human_priority", ""),
         emotion=result.get("emotion", "calm"),
         handoff_payload=result.get("handoff_payload", {}),

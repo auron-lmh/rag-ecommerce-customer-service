@@ -396,10 +396,12 @@ class MilvusStore:
             return {"exists": False, "total_vectors": 0, "error": str(e)}
 
     def delete_by_source(self, source_file: str) -> int:
+        # 修复(审查): 转义双引号，防止文件名含引号破坏 Milvus 过滤表达式（注入/解析错误）
+        safe = source_file.replace('"', '\\"')
         try:
             results = self.client.query(
                 collection_name=COLLECTION_NAME,
-                filter=f'source_file == "{source_file}"',
+                filter=f'source_file == "{safe}"',
                 output_fields=["id"],
                 limit=10000,
             )
@@ -407,7 +409,7 @@ class MilvusStore:
             if ids:
                 self.client.delete(
                     collection_name=COLLECTION_NAME,
-                    filter=f'source_file == "{source_file}"',
+                    filter=f'source_file == "{safe}"',
                 )
                 logger.info("已删除 %d 条: %s", len(ids), source_file)
             return len(ids)

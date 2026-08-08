@@ -320,6 +320,9 @@ class DegradationStrategy:
         Args:
             access_level: 模块33 内容权限等级，透传给子查询 + HyDE 检索
         """
+        import time as _time
+
+        _t0 = _time.time()
         from .query_expansion import get_query_expander
 
         expander = get_query_expander()
@@ -376,8 +379,9 @@ class DegradationStrategy:
         # 取 top_k
         final_results = unique_results[:top_k]
 
-        # 计算总耗时
-        total_ms = sum(r.metadata.get("elapsed_ms", 0) for r in final_results)
+        # 修复(审查): elapsed_ms 用真实计时——SearchResult.metadata 来自 Milvus chunk_metadata
+        # 不含 elapsed_ms，之前的 sum() 恒为 0，导致 search_time_ms 上报为 0。
+        total_ms = int((_time.time() - _t0) * 1000)
 
         return SearchResponse(
             query=query,

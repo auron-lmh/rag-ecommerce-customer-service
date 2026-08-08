@@ -57,6 +57,10 @@ class RAGState(TypedDict):
     history: list  # 会话历史（多轮指代消解用）
     memory_context: str  # 会话记忆（实体ledger/滚动摘要/历史片段）
     access_level: str = "public"  # 模块33 内容权限等级（检索过滤用，fail-safe 最低）
+    user_id: int | None = (
+        None  # 订单归属隔离: copilot 库 orders.user_id（admin=None 可查任意）
+    )
+    is_admin: bool = False  # 管理员可查任意订单（客服场景）
 
     # 意图分类结果
     intent: str
@@ -545,7 +549,12 @@ def handle_sql(state: RAGState) -> dict:
     tracking_number = entities.get("tracking_number") or ""
 
     service = get_order_service()
-    reply, found = service.reply_for(order_id, tracking_number)
+    reply, found = service.reply_for(
+        order_id,
+        tracking_number,
+        user_id=state.get("user_id"),
+        is_admin=state.get("is_admin", False),
+    )
 
     if found:
         return {"answer": reply, "needs_human": False}
@@ -834,6 +843,8 @@ class RAGWorkflow:
         history: list | None = None,
         memory_context: str = "",
         access_level: str = "public",
+        user_id: int | None = None,
+        is_admin: bool = False,
     ) -> dict:
         """运行工作流（支持 Human-in-the-Loop 中断）
 
@@ -848,6 +859,8 @@ class RAGWorkflow:
             memory_context: 会话记忆上下文（实体ledger/滚动摘要/历史片段），
                     解析"上次那个券"类跨轮指代
             access_level: 模块33 内容权限等级（检索过滤用，fail-safe 最低）
+            user_id: 订单归属隔离 seed_user_id（非管理员只能查自己的订单）
+            is_admin: 管理员可查任意订单（客服场景）
 
         Returns:
             状态字典。如果图中断，会包含 "__interrupt__" 标记
@@ -860,6 +873,8 @@ class RAGWorkflow:
             "history": history or [],
             "memory_context": memory_context or "",
             "access_level": access_level,
+            "user_id": user_id,
+            "is_admin": is_admin,
             "intent": "",
             "confidence": 0.0,
             "target": "",
@@ -893,21 +908,20 @@ class RAGWorkflow:
         try:
             result = self._app.invoke(initial_state, config)
 
-            # 关键修复: 检查是否中断（HITL 场景）
-            # LangGraph 中断时返回的对象可能包含 __interrupt__ 属性
-            if hasattr(result, "__interrupt__"):
+            # 修复(审查): LangGraph 中断返回 dict 且 __interrupt__ 在键里(非属性)。
+            # 命中中断分支时用 **result 保留已累积状态(不要回退 initial_state 丢弃结果)。
+            if isinstance(result, dict) and "__interrupt__" in result:
                 return {
-                    **initial_state,
-                    "__interrupt__": result.__interrupt__,
+                    **result,
                     "answer": "等待人工审批中...",
                 }
 
-            # 检查是否是 None（某些 LangGraph 版本中断时返回 None）
             if result is None:
                 return {
                     **initial_state,
                     "__interrupt__": True,
                     "answer": "等待人工审批中...",
+                    "error": "graph_interrupted",
                 }
 
             return result

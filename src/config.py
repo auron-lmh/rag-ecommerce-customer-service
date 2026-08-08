@@ -129,10 +129,31 @@ class Settings(BaseSettings):
     # demo 用户: {"username": {"password": "...", "role": "...", "access_level": "..."}}
     # .env 里用 JSON 字符串覆盖 (DEMO_USERS={"admin":{"password":"...",...}})
     demo_users: dict = {
-        "admin": {"password": "admin123", "role": "admin", "access_level": "vip"},
-        "vip": {"password": "vip123", "role": "vip", "access_level": "vip"},
-        "member": {"password": "member123", "role": "member", "access_level": "member"},
-        "normal": {"password": "normal123", "role": "normal", "access_level": "public"},
+        # seed_user_id: 对应 copilot 库 orders.user_id（订单归属隔离用）；admin=None 可查任意订单
+        "admin": {
+            "password": "admin123",
+            "role": "admin",
+            "access_level": "vip",
+            "seed_user_id": None,
+        },
+        "vip": {
+            "password": "vip123",
+            "role": "vip",
+            "access_level": "vip",
+            "seed_user_id": 3,
+        },
+        "member": {
+            "password": "member123",
+            "role": "member",
+            "access_level": "member",
+            "seed_user_id": 2,
+        },
+        "normal": {
+            "password": "normal123",
+            "role": "normal",
+            "access_level": "public",
+            "seed_user_id": 1,
+        },
     }
 
     @field_validator("demo_users", mode="before")

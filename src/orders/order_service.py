@@ -97,6 +97,19 @@ _SAMPLE_ORDERS = {
     ),
 }
 
+# 修复(审查): mock 订单归属 seed_user_id=1(normal 演示账号)。
+# 非管理员只能查到归属自己的 mock 订单，防止枚举单号越权。
+_SAMPLE_ORDER_OWNER = {
+    "ORD20260701001": 1,
+    "ORD20260701002": 1,
+    "ORD20260701003": 1,
+}
+# 快递单号 → 归属 seed_user_id（与 mock 订单一致）
+_SAMPLE_ORDER_TRACKING = {
+    "ORD20260701001": "SF1234567890",
+    "ORD20260701003": "YT9876543210",
+}
+
 _SAMPLE_TRACKING = {
     "SF1234567890": TrackingInfo(
         tracking_number="SF1234567890",
@@ -130,59 +143,96 @@ class OrderService:
       - reply_for(order_id, tracking) → (格式化回答, 是否命中)
     """
 
-    def query_order(self, order_id: str) -> Optional[OrderInfo]:
-        """按订单号查询订单。MySQL 优先，不可达降级 mock。"""
+    def query_order(
+        self, order_id: str, user_id: Optional[int] = None, is_admin: bool = False
+    ) -> Optional[OrderInfo]:
+        """按订单号查询订单（按用户隔离）。MySQL 优先，不可达降级 mock。
+
+        修复(审查): 增加用户归属校验——非管理员只能查自己 user_id 的订单，
+        防止枚举单号越权获取他人订单金额/物流。
+        """
         if not order_id:
             return None
         oid = order_id.strip().upper()
-        info, db_ok = self._query_order_db(oid)
+        info, db_ok = self._query_order_db(oid, user_id=user_id, is_admin=is_admin)
         if info is not None:
             return info
         if not db_ok:  # 库不可达 → mock 兜底，演示不中断
             logger.info("MySQL 不可达，订单查询降级 mock")
-            return _SAMPLE_ORDERS.get(oid)
+            mock = _SAMPLE_ORDERS.get(oid)
+            if mock is None:
+                return None
+            # mock 归属校验: 管理员可查全部，否则仅本人
+            if is_admin or _SAMPLE_ORDER_OWNER.get(oid) == user_id:
+                return mock
+            return None
         return None
 
-    def query_tracking(self, tracking_number: str) -> Optional[TrackingInfo]:
-        """按快递单号查询物流。MySQL 优先，不可达降级 mock。"""
+    def query_tracking(
+        self,
+        tracking_number: str,
+        user_id: Optional[int] = None,
+        is_admin: bool = False,
+    ) -> Optional[TrackingInfo]:
+        """按快递单号查询物流（按用户隔离）。MySQL 优先，不可达降级 mock。"""
         if not tracking_number:
             return None
         tno = tracking_number.strip().upper()
-        info, db_ok = self._query_tracking_db(tno)
+        info, db_ok = self._query_tracking_db(tno, user_id=user_id, is_admin=is_admin)
         if info is not None:
             return info
         if not db_ok:
             logger.info("MySQL 不可达，物流查询降级 mock")
-            return _SAMPLE_TRACKING.get(tno)
+            mock = _SAMPLE_TRACKING.get(tno)
+            if mock is None:
+                return None
+            # 快递单号归属: 反查所属订单 → 订单归属的 seed_user_id
+            owner_order = next(
+                (o for o, num in _SAMPLE_ORDER_TRACKING.items() if num == tno), None
+            )
+            owner = _SAMPLE_ORDER_OWNER.get(owner_order) if owner_order else None
+            if is_admin or owner == user_id:
+                return mock
+            return None
         return None
 
     def reply_for(
-        self, order_id: str = "", tracking_number: str = ""
+        self,
+        order_id: str = "",
+        tracking_number: str = "",
+        user_id: Optional[int] = None,
+        is_admin: bool = False,
     ) -> tuple[str, bool]:
-        """生成客服回复
+        """生成客服回复（按用户隔离）
 
         Args:
             order_id: 订单号（有则优先查订单）
             tracking_number: 快递单号
+            user_id: 当前用户 seed_user_id（非管理员只能查自己的）
+            is_admin: 管理员可查任意订单（客服场景）
 
         Returns:
             (reply, found) — found=True 表示工具命中并给出真实状态
         """
         if order_id:
-            info = self.query_order(order_id)
+            info = self.query_order(order_id, user_id=user_id, is_admin=is_admin)
             if info:
                 return self._format_order_reply(info), True
             return (
-                f"未查询到订单 {order_id} 的记录，请核对订单号，或联系人工客服查询。",
+                f"未查询到订单 {order_id} 的记录（或不属于当前账号），"
+                f"请核对订单号，或联系人工客服查询。",
                 False,
             )
 
         if tracking_number:
-            info = self.query_tracking(tracking_number)
+            info = self.query_tracking(
+                tracking_number, user_id=user_id, is_admin=is_admin
+            )
             if info:
                 return self._format_tracking_reply(info), True
             return (
-                f"未查询到快递单号 {tracking_number} 的物流记录，请核对单号，或联系人工客服。",
+                f"未查询到快递单号 {tracking_number} 的物流记录（或不属于当前账号），"
+                f"请核对单号，或联系人工客服。",
                 False,
             )
 
@@ -202,8 +252,16 @@ class OrderService:
             read_timeout=3,
         )
 
-    def _query_order_db(self, order_no: str) -> tuple[Optional[OrderInfo], bool]:
-        """查 orders(+tracking)。返回 (OrderInfo|None, db_ok)。"""
+    def _query_order_db(
+        self,
+        order_no: str,
+        user_id: Optional[int] = None,
+        is_admin: bool = False,
+    ) -> tuple[Optional[OrderInfo], bool]:
+        """查 orders(+tracking)。返回 (OrderInfo|None, db_ok)。
+
+        修复(审查): 非管理员强制 `AND user_id=%s`，按当前登录用户隔离订单归属。
+        """
         try:
             conn = self._connect()
         except Exception as e:
@@ -211,10 +269,18 @@ class OrderService:
             return None, False
         try:
             with conn.cursor() as cur:
+                params: list = [order_no]
+                user_clause = ""
+                if not is_admin:
+                    if user_id is None:
+                        # 无身份(理论上不会到) → 直接不返回，防越权
+                        return None, True
+                    user_clause = " AND user_id=%s"
+                    params.append(user_id)
                 cur.execute(
-                    """SELECT order_no, status, price, create_time, ship_time, complete_time
-                       FROM orders WHERE order_no=%s LIMIT 1""",
-                    (order_no,),
+                    f"""SELECT order_no, status, price, create_time, ship_time, complete_time
+                       FROM orders WHERE order_no=%s{user_clause} LIMIT 1""",
+                    tuple(params),
                 )
                 row = cur.fetchone()
                 if not row:
@@ -256,9 +322,16 @@ class OrderService:
             conn.close()
 
     def _query_tracking_db(
-        self, tracking_number: str
+        self,
+        tracking_number: str,
+        user_id: Optional[int] = None,
+        is_admin: bool = False,
     ) -> tuple[Optional[TrackingInfo], bool]:
-        """查 tracking 表。返回 (TrackingInfo|None, db_ok)。"""
+        """查 tracking 表（按用户隔离）。返回 (TrackingInfo|None, db_ok)。
+
+        修复(审查): 通过 tracking.order_no 关联 orders.user_id 校验归属，
+        非管理员查不到他人快递单号的轨迹。
+        """
         try:
             conn = self._connect()
         except Exception as e:
@@ -266,10 +339,18 @@ class OrderService:
             return None, False
         try:
             with conn.cursor() as cur:
+                params: list = [tracking_number]
+                user_clause = ""
+                if not is_admin:
+                    if user_id is None:
+                        return None, True
+                    # 关联 orders 校验归属
+                    user_clause = " AND t.order_no IN (SELECT order_no FROM orders WHERE user_id=%s)"
+                    params.append(user_id)
                 cur.execute(
-                    """SELECT carrier, tracking_number, status, events_json
-                       FROM tracking WHERE tracking_number=%s LIMIT 1""",
-                    (tracking_number,),
+                    f"""SELECT t.carrier, t.tracking_number, t.status, t.events_json
+                       FROM tracking t WHERE t.tracking_number=%s{user_clause} LIMIT 1""",
+                    tuple(params),
                 )
                 row = cur.fetchone()
                 if not row:

@@ -36,7 +36,9 @@ async def upload_by_path(
 
     resolved = Path(req.file_path).resolve()
     allowed_base = settings.data_dir.resolve()
-    if not str(resolved).startswith(str(allowed_base)):
+    # 修复(审查): 用 is_relative_to 替代字符串前缀匹配，
+    # 防止 data_evil/ 这类同前缀兄弟目录绕过路径校验。
+    if not resolved.is_relative_to(allowed_base):
         raise HTTPException(
             status_code=403,
             detail="文件路径超出允许范围，仅支持 data/ 目录下的文件",

@@ -29,9 +29,11 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://rag-api:8000")
 # 人工介入数据库
 HITL_DB = Path(__file__).parent.parent.parent / "data" / "hitl_requests.db"
 
-# 修复: 稳定会话 ID（之前每次用 chat_{时间戳} 导致 HITL 请求无法关联回会话，
-# 管理员处理后客户看不到结果）。用一个稳定的会话 ID，管理员处理结果可回查。
-SESSION_ID = f"chat_{datetime.now().strftime('%Y%m%d_%H%M')}"
+# 修复(审查): 会话 ID 用随机 uuid 而非分钟级时间戳——同分钟内多用户会共享同一会话历史/人工状态。
+# 每次启动生成一个随机会话，避免不同演示间的串扰；管理员处理结果仍可通过数据库按会话回查。
+import uuid as _uuid
+
+SESSION_ID = f"chat_{_uuid.uuid4().hex[:10]}"
 
 # 已展示给客户的处理结果（避免重复显示）
 _SHOWN_RESOLUTIONS: set[int] = set()

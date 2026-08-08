@@ -148,8 +148,10 @@ async def chat_stream(
 
         full_response = ""
         try:
+            # 修复(审查): LLM 输入与会话存储统一用脱敏后的 safe_query，
+            # 与 chat.py 一致，避免原始含手机号/身份证的 query 明文入库并直送 LLM。
             async for event in streaming_gen.stream_generate(
-                query=query,
+                query=safe_query,
                 docs=docs,
                 session_history=history,
             ):
@@ -162,7 +164,7 @@ async def chat_stream(
                         sid,
                         Message(
                             role="user",
-                            content=query,
+                            content=safe_query,
                             intent=route_result.intent_result.intent.value,
                         ),
                     )
@@ -174,7 +176,7 @@ async def chat_stream(
                     )
                     # 三层记忆: 记录本轮（抽实体 + 更新滚动摘要）
                     try:
-                        get_session_memory(sid).record_turn(query, full_response)
+                        get_session_memory(sid).record_turn(safe_query, full_response)
                     except Exception:
                         logger.warning("记录会话记忆失败: %s", sid)
                     yield f"data: {json.dumps({'event': 'done', 'data': '[DONE]'})}\n\n"

@@ -30,6 +30,9 @@ class CurrentUser:
     username: str
     role: str
     access_level: str  # public/member/vip（内容权限等级名）
+    seed_user_id: int | None = (
+        None  # copilot 库 orders.user_id（订单归属隔离，admin=None）
+    )
 
     @property
     def access_rank(self) -> int:
@@ -38,12 +41,13 @@ class CurrentUser:
 
 
 def create_access_token(user: CurrentUser) -> str:
-    """签发 JWT — payload 含 sub/role/access_level/iat/exp"""
+    """签发 JWT — payload 含 sub/role/access_level/seed_user_id/iat/exp"""
     now = datetime.now(timezone.utc)
     payload = {
         "sub": user.username,
         "role": user.role,
         "access_level": user.access_level,
+        "seed_user_id": user.seed_user_id,
         "iat": now,
         "exp": now + timedelta(minutes=settings.token_expire_minutes),
     }
@@ -62,10 +66,15 @@ def decode_token(token: str) -> CurrentUser:
     username = payload.get("sub")
     if not username:
         raise InvalidTokenError("token 缺少 sub")
+    # 修复(审查): access_level 以 role 权威映射为准（token 里的仅作展示），
+    # 防止 .env 配置 role/access_level 不一致导致越权。
+    role = str(payload.get("role", "normal"))
+    seed_user_id = payload.get("seed_user_id")
     return CurrentUser(
         username=username,
-        role=payload.get("role", "normal"),
-        access_level=payload.get("access_level", "public"),
+        role=role,
+        access_level=str(payload.get("access_level", "public")),
+        seed_user_id=(int(seed_user_id) if seed_user_id not in (None, "") else None),
     )
 
 
@@ -78,8 +87,10 @@ def authenticate(username: str, password: str) -> CurrentUser | None:
     # 防时序攻击: 长度恒定比较
     if not hmac.compare_digest(str(password), expected):
         return None
+    sid = user_cfg.get("seed_user_id")
     return CurrentUser(
         username=username,
         role=str(user_cfg.get("role", "normal")),
         access_level=str(user_cfg.get("access_level", "public")),
+        seed_user_id=int(sid) if sid is not None else None,
     )
