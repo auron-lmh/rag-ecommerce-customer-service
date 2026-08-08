@@ -68,7 +68,7 @@ class TestProactiveDecomposition:
         monkeypatch.setattr(
             s,
             "_expand_and_search",
-            lambda q, k: SearchResponse(
+            lambda q, k, access_level="public": SearchResponse(
                 query=q,
                 results=[_res("a", 0.9)],
                 total_found=1,
@@ -88,7 +88,7 @@ class TestProactiveDecomposition:
         monkeypatch.setattr(
             s,
             "_expand_and_search",
-            lambda q, k: SearchResponse(
+            lambda q, k, access_level="public": SearchResponse(
                 query=q,
                 results=[_res("a", 0.3)],
                 total_found=1,

@@ -16,7 +16,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv pip install ruff --system
+      # 固定 ruff 版本：新版默认启用 UP007/BLE001 等新规则，会把既有 Optional 风格全标出来
+      - run: uv pip install 'ruff>=0.15,<0.16' --system
       - run: ruff check src/
 
   # ── 单元测试 ──
@@ -31,7 +32,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv pip install -r requirements.txt --system
+      # pytest 系列在 pyproject dev-deps，requirements.txt 不含 → CI 显式装
+      - run: uv pip install -r requirements.txt pytest pytest-asyncio pytest-cov --system
       - run: |
           pytest tests/ \
             -m "not slow and not integration" \
