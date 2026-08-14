@@ -37,7 +37,7 @@ services:
       - "8000:8000"
     environment:
       - TZ=Asia/Shanghai
-      - JWT_SECRET=${JWT_SECRET:?请设置强随机 JWT_SECRET，例如: openssl rand -hex 32}
+      - JWT_SECRET=${JWT_SECRET:?请设置强随机 JWT_SECRET}
       - ENABLE_DEMO_USERS=${ENABLE_DEMO_USERS:-true}  # 演示/测试用；生产请设 false
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
