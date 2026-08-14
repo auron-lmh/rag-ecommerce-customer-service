@@ -65,6 +65,14 @@ class LLMClient:
         self._max_retries = max_retries
         self._sync_client: Optional[httpx.Client] = None  # 同步客户端
         self._async_client: Optional[httpx.AsyncClient] = None  # 异步客户端
+        self.last_usage: dict = (
+            {}
+        )  # 最近一次调用的 usage（prompt/completion/total_tokens）
+        self._usage_total: dict = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }  # 会话级 token 累加（每次请求 reset_usage 清零）
 
     # ── 公共 API ──
 
@@ -191,7 +199,9 @@ class LLMClient:
                 timeout=httpx.Timeout(timeout),
             )
             response.raise_for_status()
-            return response.json()["choices"][0]["message"]["content"].strip()
+            data = response.json()
+            self._record_usage(data.get("usage", {}))  # 捕获 token 消耗
+            return data["choices"][0]["message"]["content"].strip()
 
         except httpx.TimeoutException:
             raise LLMClientError(f"异步调用超时 ({timeout}s)")
@@ -349,6 +359,29 @@ class LLMClient:
 
         raise last_error or LLMClientError("未知错误")
 
+    def _record_usage(self, usage: dict) -> None:
+        """记录单次调用 usage 并累加到会话总量（供成本统计）"""
+        self.last_usage = usage or {}
+        self._usage_total["prompt_tokens"] += self.last_usage.get("prompt_tokens", 0)
+        self._usage_total["completion_tokens"] += self.last_usage.get(
+            "completion_tokens", 0
+        )
+        self._usage_total["total_tokens"] += self.last_usage.get("total_tokens", 0)
+
+    def reset_usage(self) -> None:
+        """重置会话 token 累加器（每次请求开始时调用）"""
+        self._usage_total = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        self.last_usage = {}
+
+    @property
+    def total_usage(self) -> dict:
+        """返回本次会话累计 token 用量（副本）"""
+        return dict(self._usage_total)
+
     def _do_call(
         self,
         messages: list[dict],
@@ -387,7 +420,9 @@ class LLMClient:
                 )
 
             resp.raise_for_status()
-            message = resp.json()["choices"][0]["message"]
+            data = resp.json()
+            self._record_usage(data.get("usage", {}))  # 捕获 token 消耗，供成本统计
+            message = data["choices"][0]["message"]
 
             # Function Calling 模式：返回 tool_calls 的 arguments
             if "tool_calls" in message and message["tool_calls"]:

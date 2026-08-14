@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -93,6 +94,9 @@ class CircuitBreaker:
     successes: int = field(default=0)
     last_failure_time: float = field(default=0)
     half_open_calls: int = field(default=0)
+    _lock: threading.RLock = field(
+        default_factory=threading.RLock, init=False, repr=False
+    )  # 并发保护（检查/计数/状态转换非原子，P1 修复）
 
     # ═══════════════════════════════════════════════
     # 公共 API
@@ -109,69 +113,77 @@ class CircuitBreaker:
             CircuitOpenError: 熔断器打开
             Exception: fn 的原始异常
         """
-        if not self._allow_request():
-            raise CircuitOpenError(
-                f"熔断器 {self.state.value}，"
-                f"{self._cooldown_remaining():.0f}s 后重试"
-            )
+        with self._lock:
+            if not self._allow_request():
+                raise CircuitOpenError(
+                    f"熔断器 {self.state.value}，"
+                    f"{self._cooldown_remaining():.0f}s 后重试"
+                )
 
-        if self.state == CircuitState.HALF_OPEN:
-            self.half_open_calls += 1
+            if self.state == CircuitState.HALF_OPEN:
+                self.half_open_calls += 1
 
         try:
             result = fn(*args, **kwargs)
-            self._on_success()
-            return result
         except CircuitOpenError:
             raise
         except Exception:
-            self._on_failure()
+            with self._lock:
+                self._on_failure()
             raise
+        with self._lock:
+            self._on_success()
+        return result
 
     async def call_async(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
         """异步调用（带熔断保护）
 
         支持 async 函数和同步函数两种 fn。
         """
-        if not self._allow_request():
-            raise CircuitOpenError(
-                f"熔断器 {self.state.value}，"
-                f"{self._cooldown_remaining():.0f}s 后重试"
-            )
+        with self._lock:
+            if not self._allow_request():
+                raise CircuitOpenError(
+                    f"熔断器 {self.state.value}，"
+                    f"{self._cooldown_remaining():.0f}s 后重试"
+                )
 
-        if self.state == CircuitState.HALF_OPEN:
-            self.half_open_calls += 1
+            if self.state == CircuitState.HALF_OPEN:
+                self.half_open_calls += 1
 
         try:
             if asyncio.iscoroutinefunction(fn):
                 result = await fn(*args, **kwargs)
             else:
                 result = fn(*args, **kwargs)
-            self._on_success()
-            return result
         except CircuitOpenError:
             raise
         except Exception:
-            self._on_failure()
+            with self._lock:
+                self._on_failure()
             raise
+        with self._lock:
+            self._on_success()
+        return result
 
     def stats(self) -> dict:
         """获取熔断器统计信息"""
-        return {
-            "state": self.state.value,
-            "failures": self.failures,
-            "successes": self.successes,
-            "half_open_calls": self.half_open_calls,
-            "cooldown_remaining_s": self._cooldown_remaining(),
-        }
+        with self._lock:
+            return {
+                "state": self.state.value,
+                "failures": self.failures,
+                "successes": self.successes,
+                "half_open_calls": self.half_open_calls,
+                "cooldown_remaining_s": self._cooldown_remaining(),
+            }
 
     def reset(self) -> None:
         """手动重置熔断器到 CLOSED 状态（测试/运维用）"""
-        logger.info("手动重置熔断器: %s → CLOSED", self.state.value)
-        self.state = CircuitState.CLOSED
-        self.failures = 0
-        self.successes = 0
-        self.half_open_calls = 0
+        with self._lock:
+            logger.info("手动重置熔断器: %s → CLOSED", self.state.value)
+            self.state = CircuitState.CLOSED
+            self.failures = 0
+            self.successes = 0
+            self.half_open_calls = 0
 
     # ═══════════════════════════════════════════════
     # 内部逻辑

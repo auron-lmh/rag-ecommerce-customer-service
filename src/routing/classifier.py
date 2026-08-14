@@ -124,7 +124,12 @@ class IntentClassifier:
         """
         try:
             return self._call_llm(user_message)
-        except LLMClientError as e:
+        except (
+            LLMClientError,
+            RuntimeError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as e:
             logger.error("意图分类失败，降级为关键词匹配: %s", e)
             return self._fallback_classify(user_message)
 

@@ -192,3 +192,30 @@ class TestLoginEndpoint:
             assert r.status_code == 200
         finally:
             real_app.dependency_overrides.clear()
+
+
+def test_empty_jwt_secret_rejected_on_startup(monkeypatch):
+    """P0 回归：JWT_SECRET 为空时，应用启动校验拒绝启动（防伪造 admin token）"""
+    monkeypatch.setattr(settings, "jwt_secret", "")
+    with pytest.raises(RuntimeError, match="JWT_SECRET"):
+        with TestClient(real_app):  # with 触发 lifespan
+            pass
+
+
+def test_demo_users_disabled_by_default(monkeypatch):
+    """P0 回归：enable_demo_users=False 时，demo 弱密码账号不可登录"""
+    monkeypatch.setattr(settings, "enable_demo_users", False)
+    assert authenticate("admin", "admin123") is None
+    assert authenticate("member", "member123") is None
+    assert authenticate("normal", "normal123") is None
+
+
+def test_access_level_derived_from_role_not_token():
+    """P1 回归：access_level 以 role 权威映射，token 里伪造的 access_level 被忽略"""
+    token = create_access_token(
+        CurrentUser(username="u", role="normal", access_level="vip")
+    )
+    user = decode_token(token)
+    assert user.role == "normal"
+    assert user.access_level == "public"  # 以 role=normal 映射，而非 token 里的 vip
+    assert user.access_rank == 0

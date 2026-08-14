@@ -261,6 +261,37 @@ class StructuredLogger:
         )
 
 
+def setup_root_logging() -> None:
+    """配置 root logger，让全项目模块的 logging.getLogger(__name__) 日志落到结构化 handler。
+
+    业务模块用裸 logging.getLogger(__name__)，此前 root 无 handler 导致日志丢失
+    （仅 WARNING+ 打到 stderr，无文件输出）。app 启动（lifespan）时调用一次，幂等。
+    """
+    root = logging.getLogger()
+    if root.handlers:
+        return
+    root.setLevel(logging.INFO)
+
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.INFO)
+    console.setFormatter(PrettyFormatter())
+    root.addHandler(console)
+
+    app_handler = logging.handlers.TimedRotatingFileHandler(
+        APP_LOG, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    app_handler.setLevel(logging.INFO)
+    app_handler.setFormatter(JsonFormatter())
+    root.addHandler(app_handler)
+
+    error_handler = logging.handlers.TimedRotatingFileHandler(
+        ERROR_LOG, when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(JsonFormatter())
+    root.addHandler(error_handler)
+
+
 # ── 模块级单例 ──
 
 from src.engineering.singleton import singleton_factory

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 
-from src.access import access_rank_for_role
+from src.access import access_rank_for_role, level_name
 from src.config import settings
 
 
@@ -73,13 +73,17 @@ def decode_token(token: str) -> CurrentUser:
     return CurrentUser(
         username=username,
         role=role,
-        access_level=str(payload.get("access_level", "public")),
+        # access_level 以 role 权威映射（不信 token 里的 access_level，防伪造越权）
+        access_level=level_name(access_rank_for_role(role)),
         seed_user_id=(int(seed_user_id) if seed_user_id not in (None, "") else None),
     )
 
 
 def authenticate(username: str, password: str) -> CurrentUser | None:
     """校验用户名/密码（查 settings.demo_users），成功返回 CurrentUser，失败返回 None"""
+    # P0 修复: demo 用户默认关闭，须显式 ENABLE_DEMO_USERS=true 才可用（防弱密码后门）
+    if not settings.enable_demo_users:
+        return None
     user_cfg = settings.demo_users.get(username)
     if not user_cfg:
         return None

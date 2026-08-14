@@ -135,20 +135,30 @@ class DegradationStrategy:
             logger.info("复杂查询分解结果不足，继续双路召回")
 
         # ── Level 1: 双路召回（原始 + 改写并行合并去重）──
-        if secondary_query and secondary_query != query:
-            response = self.retriever.search_dual_path(
+        try:
+            if secondary_query and secondary_query != query:
+                response = self.retriever.search_dual_path(
+                    query=query,
+                    secondary_query=secondary_query,
+                    top_k=top_k,
+                    use_rerank=use_rerank,
+                    access_level=access_level,
+                )
+            else:
+                response = self.retriever.search(
+                    query=query,
+                    top_k=top_k,
+                    use_rerank=use_rerank,
+                    access_level=access_level,
+                )
+        except Exception as e:
+            logger.warning("Level 1 检索异常（Milvus 不可达？），降级: %s", e)
+            response = SearchResponse(
                 query=query,
-                secondary_query=secondary_query,
-                top_k=top_k,
-                use_rerank=use_rerank,
-                access_level=access_level,
-            )
-        else:
-            response = self.retriever.search(
-                query=query,
-                top_k=top_k,
-                use_rerank=use_rerank,
-                access_level=access_level,
+                results=[],
+                total_found=0,
+                elapsed_ms=0,
+                threshold=threshold,
             )
 
         if self._is_sufficient(response, threshold):
@@ -175,12 +185,16 @@ class DegradationStrategy:
                 "Level 2 改写 (attempt %d): %s → %s", attempt + 1, query, rewritten
             )
 
-            new_response = self.retriever.search(
-                query=rewritten,
-                top_k=top_k,
-                use_rerank=use_rerank,
-                access_level=access_level,
-            )
+            try:
+                new_response = self.retriever.search(
+                    query=rewritten,
+                    top_k=top_k,
+                    use_rerank=use_rerank,
+                    access_level=access_level,
+                )
+            except Exception as e:
+                logger.warning("Level 2 改写检索异常，跳过本次改写: %s", e)
+                continue
             new_score = self._max_score(new_response)
 
             # 检查是否有改善

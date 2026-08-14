@@ -438,12 +438,15 @@ def create_chat_ui() -> gr.Blocks:
 
 def main():
     """启动聊天界面"""
+    from src.admin.api_auth import gradio_auth
+
     app = create_chat_ui()
     app.launch(
         server_name="0.0.0.0",
         server_port=7861,
         share=False,
         show_error=True,
+        auth=gradio_auth(),
     )
 
 

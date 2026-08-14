@@ -121,11 +121,14 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     # ========== 鉴权 (JWT, 模块33) ==========
-    jwt_secret: str = (
-        "dev-secret-change-me-0123456789abcdef0123456789abcdef"  # 生产必须用 .env 覆盖
-    )
+    jwt_secret: str = ""  # 必须通过 .env / 环境变量显式设置；为空时应用启动校验拒绝启动
     jwt_algorithm: str = "HS256"
     token_expire_minutes: int = 720  # 12 小时
+    # 是否启用内置 demo 用户（明文弱密码，仅演示/测试）。生产必须为 False。
+    enable_demo_users: bool = False
+    # ========== Gradio UI 鉴权 ==========
+    gradio_username: str = ""  # UI 访问凭据；为空时三个 UI 拒绝无鉴权启动
+    gradio_password: str = ""
     # demo 用户: {"username": {"password": "...", "role": "...", "access_level": "..."}}
     # .env 里用 JSON 字符串覆盖 (DEMO_USERS={"admin":{"password":"...",...}})
     demo_users: dict = {

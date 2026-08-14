@@ -37,6 +37,8 @@ services:
       - "8000:8000"
     environment:
       - TZ=Asia/Shanghai
+      - JWT_SECRET=${JWT_SECRET:?请设置强随机 JWT_SECRET，例如: openssl rand -hex 32}
+      - ENABLE_DEMO_USERS=${ENABLE_DEMO_USERS:-true}  # 演示/测试用；生产请设 false
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}
@@ -79,6 +81,8 @@ services:
       - "7860:7860"
     environment:
       - TZ=Asia/Shanghai
+      - GRADIO_USERNAME=${GRADIO_USERNAME:?请设置 UI 访问用户名}
+      - GRADIO_PASSWORD=${GRADIO_PASSWORD:?请设置 UI 访问密码}
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}
@@ -117,6 +121,10 @@ services:
       - "7861:7861"
     environment:
       - TZ=Asia/Shanghai
+      - GRADIO_USERNAME=${GRADIO_USERNAME:?请设置 UI 访问用户名}
+      - GRADIO_PASSWORD=${GRADIO_PASSWORD:?请设置 UI 访问密码}
+      - API_USERNAME=${API_USERNAME:?请设置 API 服务账号}
+      - API_PASSWORD=${API_PASSWORD:?请设置 API 服务账号密码}
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}
@@ -155,6 +163,10 @@ services:
       - "7862:7862"
     environment:
       - TZ=Asia/Shanghai
+      - GRADIO_USERNAME=${GRADIO_USERNAME:?请设置 UI 访问用户名}
+      - GRADIO_PASSWORD=${GRADIO_PASSWORD:?请设置 UI 访问密码}
+      - API_USERNAME=${API_USERNAME:?请设置 API 服务账号}
+      - API_PASSWORD=${API_PASSWORD:?请设置 API 服务账号密码}
       - MILVUS_HOST=milvus-standalone
       - MILVUS_PORT=19530
       - MILVUS_USER=${MILVUS_USER:-root}

@@ -153,7 +153,7 @@ class SelfCorrector:
 
         if (
             not check.has_hallucination
-            or check.overall_faithfulness >= faithfulness_threshold
+            and check.overall_faithfulness >= faithfulness_threshold
         ):
             return GenerationResult(
                 answer=answer,
@@ -216,7 +216,7 @@ class SelfCorrector:
 
             if (
                 not check.has_hallucination
-                or check.overall_faithfulness >= faithfulness_threshold
+                and check.overall_faithfulness >= faithfulness_threshold
             ):
                 return GenerationResult(
                     answer=answer,

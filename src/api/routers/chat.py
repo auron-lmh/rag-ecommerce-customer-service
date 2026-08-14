@@ -52,6 +52,11 @@ async def chat(
 
     workflow = get_workflow()
 
+    # 重置 LLM token 累加器，统计本次请求真实用量（而非字符数估算）
+    from src.engineering.llm_client import get_llm_client
+
+    get_llm_client().reset_usage()
+
     # ── 多轮对话: 加载会话历史（指代消解用）──
     session_manager = get_session_manager()
     session = session_manager.get_session(sid)
@@ -116,11 +121,18 @@ async def chat(
     # 成本监控: 记录本次查询（token 数按长度粗略估算，成本用官方价格折算）
     try:
         from src.engineering import get_monitor
+        from src.engineering.llm_client import get_llm_client
         from src.engineering.monitor import QueryRecord, estimate_cost
 
         _answer = result.get("answer", "")
-        _completion_tokens = max(1, len(_answer) // 2)
-        _prompt_tokens = max(1, len(safe_query))
+        _usage = get_llm_client().total_usage
+        _prompt_tokens = _usage.get("prompt_tokens") or max(1, len(safe_query))
+        _completion_tokens = _usage.get("completion_tokens") or max(
+            1, len(_answer) // 2
+        )
+        _total_tokens = _usage.get("total_tokens") or (
+            _prompt_tokens + _completion_tokens
+        )
         get_monitor().record(
             QueryRecord(
                 user_query=safe_query,
@@ -134,7 +146,7 @@ async def chat(
                 faithfulness=result.get("faithfulness", 0),
                 prompt_tokens=_prompt_tokens,
                 completion_tokens=_completion_tokens,
-                total_tokens=_prompt_tokens + _completion_tokens,
+                total_tokens=_total_tokens,
                 llm_cost=estimate_cost(
                     settings.default_model, _prompt_tokens, _completion_tokens
                 ),

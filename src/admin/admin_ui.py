@@ -25,10 +25,6 @@ import os
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://rag-api:8000")
 
-# 模块33: 管理端用 admin 账号登录 API（在 api_auth 首次导入前设好 env 默认）
-os.environ.setdefault("API_USERNAME", "admin")
-os.environ.setdefault("API_PASSWORD", "admin123")
-
 # 人工介入数据库
 HITL_DB = Path(__file__).parent.parent.parent / "data" / "hitl_requests.db"
 
@@ -439,12 +435,15 @@ def create_admin_ui() -> gr.Blocks:
 
 def main():
     """启动管理员界面"""
+    from src.admin.api_auth import gradio_auth
+
     app = create_admin_ui()
     app.launch(
         server_name="0.0.0.0",
         server_port=7862,
         share=False,
         show_error=True,
+        auth=gradio_auth(),
     )
 
 

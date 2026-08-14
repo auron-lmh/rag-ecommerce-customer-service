@@ -35,6 +35,17 @@ async def lifespan(app: FastAPI):
     模块33: 已有 Milvus collection 自动补 access_level 字段（INT8 + INVERTED 索引）。
     Milvus 不可达/无 collection 时静默跳过（连接被拒绝快速失败，不阻塞启动）。
     """
+    # 结构化日志接入：配置 root logger，让业务模块日志落到 JSON 文件（P1 修复）
+    from src.engineering.logger import setup_root_logging
+
+    setup_root_logging()
+
+    # P0 修复: JWT_SECRET 为空 = 未配置，拒绝以空/可预测密钥启动（防伪造 admin token）
+    if not settings.jwt_secret:
+        raise RuntimeError(
+            "JWT_SECRET 未配置：请在 .env 或环境变量中设置强随机密钥后重启"
+        )
+
     try:
         from src.embedding.milvus_store import MilvusStore
 

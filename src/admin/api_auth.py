@@ -19,8 +19,8 @@ import requests
 logger = logging.getLogger(__name__)
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://rag-api:8000")
-API_USERNAME = os.getenv("API_USERNAME", "normal")
-API_PASSWORD = os.getenv("API_PASSWORD", "normal123")
+API_USERNAME = os.getenv("API_USERNAME", "")
+API_PASSWORD = os.getenv("API_PASSWORD", "")
 
 # token 缓存（10 分钟刷新一次，远小于 720min 过期）
 _token_cache: dict = {"token": "", "ts": 0.0}
@@ -62,3 +62,14 @@ def auth_headers() -> dict:
     """返回带 Authorization 的请求头（登录失败则空 dict）"""
     token = get_token()
     return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def gradio_auth() -> tuple[str, str]:
+    """Gradio UI Basic Auth 凭据；未配置则抛错拒绝无鉴权启动（P0 修复）"""
+    from src.config import settings
+
+    if not (settings.gradio_username and settings.gradio_password):
+        raise RuntimeError(
+            "未配置 GRADIO_USERNAME / GRADIO_PASSWORD，拒绝无鉴权启动 UI"
+        )
+    return (settings.gradio_username, settings.gradio_password)

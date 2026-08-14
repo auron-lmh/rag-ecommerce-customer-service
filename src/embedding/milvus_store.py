@@ -295,6 +295,9 @@ class MilvusStore:
         t0 = time.time()
         self._ensure_ready()
 
+        # 存储层纵深防御：漏传权限过滤时默认 public（只返回公开内容），防越权泄露
+        filter_expr = filter_expr or f"{MILVUS_ACCESS_FIELD} <= 0"
+
         raw = self.client.search(
             collection_name=COLLECTION_NAME,
             data=[query_vector],
@@ -319,6 +322,9 @@ class MilvusStore:
         """Hybrid Search: BM25 稀疏 + 稠密向量 + WeightedRanker 融合"""
         t0 = time.time()
         self._ensure_ready()
+
+        # 存储层纵深防御：漏传权限过滤时默认 public（只返回公开内容），防越权泄露
+        filter_expr = filter_expr or f"{MILVUS_ACCESS_FIELD} <= 0"
 
         # 修复(模块33): Milvus hybrid_search 的**顶层 filter 会被忽略**（实测不生效），
         # 必须把过滤表达式传给每个 AnnSearchRequest 的 filter 参数，否则权限过滤失效。

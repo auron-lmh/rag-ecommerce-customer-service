@@ -252,7 +252,11 @@ class Retriever:
                 )
 
         # ── 缓存结果（存 dict，Redis 可 JSON 序列化）──
-        cache.set_query_result(cache_key, _search_response_to_dict(response), ttl=3600)
+        cache.set_query_result(
+            cache_key,
+            _search_response_to_dict(response),
+            ttl=settings.query_cache_ttl,
+        )
 
         return response
 

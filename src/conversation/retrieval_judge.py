@@ -68,7 +68,7 @@ class RetrievalJudge:
 
         try:
             return self._call_llm(query, history)
-        except LLMClientError as e:
+        except (LLMClientError, json.JSONDecodeError, TypeError, ValueError) as e:
             logger.warning("重检索判断失败，默认需要检索: %s", e)
             return True, "判断失败，默认检索"
 

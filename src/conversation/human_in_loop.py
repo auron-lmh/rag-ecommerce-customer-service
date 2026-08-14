@@ -64,7 +64,7 @@ class HumanInLoopHandler:
         query: str,
         intent: str = "",
         answer: str = "",
-        confidence: float = 0.0,
+        confidence: Optional[float] = None,
         emotion: str = "calm",
     ) -> dict:
         """检查是否需要人工介入
@@ -132,8 +132,8 @@ class HumanInLoopHandler:
                         "priority": "low",
                     }
 
-        # 检查意图置信度
-        if confidence < 0.4:
+        # 检查意图置信度（仅当调用方明确提供了 confidence 才判断，防默认 0.0 误转人工）
+        if confidence is not None and confidence < 0.4:
             logger.info("人工介入: 意图置信度过低 (%.2f)", confidence)
             return {
                 "needs_human": True,

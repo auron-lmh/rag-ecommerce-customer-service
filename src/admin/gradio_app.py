@@ -291,8 +291,14 @@ class ProcessorApp:
 
 
 def main():
+    from src.admin.api_auth import gradio_auth
+
     app = ProcessorApp()
-    app.create_interface().launch(server_name="0.0.0.0", server_port=7860)
+    app.create_interface().launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        auth=gradio_auth(),
+    )
 
 
 if __name__ == "__main__":
