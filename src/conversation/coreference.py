@@ -104,7 +104,10 @@ class CoreferenceResolver:
             # 防止改写为空或异常长
             if not completed or len(completed) > 200:
                 return query
-            logger.info("指代消解: %s → %s", query[:40], completed[:60])
+            from src.engineering.pii_redactor import redact_text
+
+            safe_query, _ = redact_text(query)
+            logger.info("指代消解: %s → %s", safe_query[:40], completed[:60])
             return completed
         except Exception as e:
             logger.warning("指代消解失败，使用原 query: %s", e)

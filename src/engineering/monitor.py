@@ -133,6 +133,10 @@ class QueryMonitor:
 
     def record(self, record: QueryRecord) -> None:
         """记录查询"""
+        # PII 脱敏：监控/审计库不存真实敏感信息（手机号/订单号/身份证等）
+        from src.engineering.pii_redactor import redact_text
+
+        safe_query, _ = redact_text(record.user_query or "")
         with sqlite3.connect(self._db_path) as conn:
             conn.execute(
                 """INSERT INTO query_records (
@@ -146,7 +150,7 @@ class QueryMonitor:
                 (
                     record.query_id,
                     record.timestamp,
-                    record.user_query,
+                    safe_query,
                     record.intent,
                     record.retrieval_method,
                     record.degradation_level,

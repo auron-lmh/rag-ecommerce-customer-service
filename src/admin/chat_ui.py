@@ -126,6 +126,10 @@ def save_hitl_request(
 ):
     """保存人工介入请求到数据库"""
     try:
+        # PII 脱敏：工单库不存真实敏感信息
+        from src.engineering.pii_redactor import redact_text
+
+        safe_query, _ = redact_text(user_query or "")
         with sqlite3.connect(HITL_DB) as conn:
             conn.execute(
                 """INSERT INTO hitl_requests
@@ -133,7 +137,7 @@ def save_hitl_request(
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
-                    user_query,
+                    safe_query,
                     intent,
                     confidence,
                     human_reason,
@@ -142,7 +146,7 @@ def save_hitl_request(
                 ),
             )
             conn.commit()
-            logger.info("人工介入请求已保存: %s", user_query[:50])
+            logger.info("人工介入请求已保存: %s", safe_query[:50])
     except Exception as e:
         logger.error("保存人工介入请求失败: %s", e)
 
