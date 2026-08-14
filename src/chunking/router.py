@@ -34,6 +34,7 @@ def chunk_document(
     target_size: int = 512,
     min_size: int | None = None,
     max_size: int = 1024,
+    overlap: int = 80,
 ) -> ChunkResult:
     """统一入口 — 根据文档类型自动选择分块策略
 
@@ -44,6 +45,8 @@ def chunk_document(
         target_size: 目标 chunk 大小 (token)
         min_size: 最小 chunk 大小 (默认 target_size / 5)
         max_size: 最大 chunk 大小 (token)
+        overlap: 相邻 chunk 重叠字符数（默认 80，约 target_size=512 token 的 10%）。
+                 重叠保留边界上下文，避免检索时语义被 chunk 边界切断。
 
     Returns:
         ChunkResult（含chunks + 统计信息）
@@ -55,19 +58,34 @@ def chunk_document(
 
     if isinstance(splitter, FAQSplitter):
         return _wrap_splitter(
-            splitter, text, source_file, doc_type, strategy_name="faq"
+            splitter, text, source_file, doc_type, strategy_name="faq", overlap=overlap
         )
     elif isinstance(splitter, MarkdownSplitter):
         return _wrap_splitter(
-            splitter, text, source_file, doc_type, strategy_name="markdown"
+            splitter,
+            text,
+            source_file,
+            doc_type,
+            strategy_name="markdown",
+            overlap=overlap,
         )
     elif isinstance(splitter, SemanticSplitter):
         return _wrap_splitter(
-            splitter, text, source_file, doc_type, strategy_name="semantic"
+            splitter,
+            text,
+            source_file,
+            doc_type,
+            strategy_name="semantic",
+            overlap=overlap,
         )
     else:
         return _wrap_splitter(
-            splitter, text, source_file, doc_type, strategy_name="recursive"
+            splitter,
+            text,
+            source_file,
+            doc_type,
+            strategy_name="recursive",
+            overlap=overlap,
         )
 
 
@@ -190,6 +208,7 @@ def _wrap_splitter(
     source_file: str,
     doc_type: DocType | None,
     strategy_name: str,
+    overlap: int = 0,
 ) -> ChunkResult:
     """包装非BaseSplitter的策略 → 统一ChunkResult输出"""
     from .models import Chunk, ChunkStrategy
@@ -205,6 +224,7 @@ def _wrap_splitter(
 
     raw_chunks = splitter.split(text)
     chunks: list[Chunk] = []
+    prev_content = ""  # 前一块「纯内容」（不含 overlap），用于取尾部重叠
 
     for i, content in enumerate(raw_chunks):
         if not content.strip():
@@ -215,12 +235,17 @@ def _wrap_splitter(
         if not content.strip():
             continue
 
+        # Overlap 接线: 把前一块纯内容尾部拼到当前块开头，保留边界上下文，
+        # 避免语义被 chunk 边界切断（检索时边界处的关键信息不丢）。
+        overlap_text = prev_content[-overlap:] if overlap > 0 and prev_content else ""
+        final_content = (overlap_text + "\n" + content) if overlap_text else content
+
         chunks.append(
             Chunk(
                 chunk_id=_make_chunk_id(source_file, i),
-                content=content,
-                char_count=count_chars(content),
-                token_count=count_tokens(content),
+                content=final_content,
+                char_count=count_chars(final_content),
+                token_count=count_tokens(final_content),
                 chunk_index=i,
                 source_file=source_file,
                 doc_type=doc_type,
@@ -228,8 +253,11 @@ def _wrap_splitter(
                 target_size=getattr(splitter, "target_size", 0),
                 heading_path=_extract_headings(content),
                 section_title=_extract_section_title(content),
+                overlap_with_prev=bool(overlap_text),
+                overlap_content=overlap_text,
             )
         )
+        prev_content = content  # 存纯内容，避免重叠累积
 
     for c in chunks:
         c.total_chunks = len(chunks)

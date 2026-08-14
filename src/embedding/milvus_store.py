@@ -354,6 +354,31 @@ class MilvusStore:
         )
         return self._build_response(query_text, raw, threshold, time.time() - t0)
 
+    def sparse_search(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        filter_expr: Optional[str] = None,
+        threshold: float = 0.0,
+    ) -> SearchResponse:
+        """纯 BM25 稀疏检索（关键词精确匹配，供 RRF 融合用）"""
+        t0 = time.time()
+        self._ensure_ready()
+
+        # 存储层纵深防御：漏传权限过滤时默认 public（只返回公开内容），防越权泄露
+        filter_expr = filter_expr or f"{MILVUS_ACCESS_FIELD} <= 0"
+
+        raw = self.client.search(
+            collection_name=COLLECTION_NAME,
+            data=[query_text],
+            anns_field=SPARSE_FIELD,
+            search_params={"metric_type": "BM25", "params": {"drop_ratio_search": 0.2}},
+            limit=top_k,
+            filter=filter_expr,
+            output_fields=[TEXT_FIELD, "doc_type", "source_file", "heading_path"],
+        )
+        return self._build_response(query_text, raw, threshold, time.time() - t0)
+
     def _build_response(
         self, query: str, raw_results: list, threshold: float, elapsed: float
     ) -> SearchResponse:
@@ -400,6 +425,33 @@ class MilvusStore:
         except Exception as e:
             logger.warning("统计获取失败: %s", e)
             return {"exists": False, "total_vectors": 0, "error": str(e)}
+
+    def query_chunks_by_source(self, source_file: str) -> list[dict]:
+        """查询某 source 的所有 chunk（按 chunk_index 排序，供父文档检索补全用）"""
+        safe = source_file.replace('"', '\\"')
+        try:
+            results = self.client.query(
+                collection_name=COLLECTION_NAME,
+                filter=f'source_file == "{safe}"',
+                output_fields=["id", "text", "chunk_metadata"],
+                limit=10000,
+            )
+        except Exception as e:
+            logger.warning("查询 source chunks 失败: %s", e)
+            return []
+
+        items = []
+        for r in results:
+            meta = r.get("chunk_metadata", {}) or {}
+            items.append(
+                {
+                    "chunk_id": str(r.get("id", "")),
+                    "text": r.get("text", ""),
+                    "chunk_index": meta.get("chunk_index", 0),
+                }
+            )
+        items.sort(key=lambda x: x["chunk_index"])
+        return items
 
     def delete_by_source(self, source_file: str) -> int:
         # 修复(审查): 转义双引号，防止文件名含引号破坏 Milvus 过滤表达式（注入/解析错误）

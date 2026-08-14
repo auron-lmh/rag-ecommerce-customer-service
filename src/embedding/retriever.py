@@ -174,8 +174,8 @@ class Retriever:
         # 关键修复: 缓存 Key 包含所有查询参数（含过滤条件），避免返回错误缓存
         # 模块33: 必须含 access_level —— 不同权限用户命中彼此缓存 = 越权泄漏
         cache_key = (
-            f"{query}:{top_k}:{use_hybrid}:{use_rerank}:{filter_by_doc_type}:"
-            f"{filter_by_source}:{threshold}:{access_level}"
+            f"{query}:{top_k}:{'rrf' if use_hybrid else 'dense'}:{use_rerank}:"
+            f"{filter_by_doc_type}:{filter_by_source}:{threshold}:{access_level}"
         )
         cached = cache.get_query_result(cache_key)
         if cached:
@@ -203,15 +203,27 @@ class Retriever:
         recall_k = max(top_k, settings.retrieval_dense_top_k) if use_rerank else top_k
 
         if use_hybrid:
-            response = self.store.hybrid_search(
+            # RRF 融合（替代 WeightedRanker 固定权重）：
+            # dense（语义）+ sparse（关键词）分别召回，按倒数排名融合，
+            # 解决两路分数尺度不统一（IP vs BM25）导致的固定权重偏差。
+            dense_resp = self.store.dense_search(
                 query_vector=query_vector.tolist(),
-                query_text=query,
                 top_k=recall_k,
                 filter_expr=filter_expr,
                 threshold=threshold,
-                sparse_weight=sparse_weight,
-                dense_weight=dense_weight,
             )
+            # 同义词扩展: sparse 路用「原始 query + 同义词」提升关键词召回，
+            # dense 路仍用原始 query embedding（语义不变）。
+            from .synonyms import expand_query_with_synonyms
+
+            expanded_query = expand_query_with_synonyms(query)
+            sparse_resp = self.store.sparse_search(
+                query_text=expanded_query,
+                top_k=recall_k,
+                filter_expr=filter_expr,
+                threshold=0.0,  # BM25 不过阈值，作为关键词补充召回
+            )
+            response = self._rrf_fusion(dense_resp, sparse_resp, query)
         else:
             response = self.store.dense_search(
                 query_vector=query_vector.tolist(),
@@ -259,6 +271,95 @@ class Retriever:
         )
 
         return response
+
+    def _rrf_fusion(
+        self,
+        dense_resp: SearchResponse,
+        sparse_resp: SearchResponse,
+        query: str,
+        k: int = 60,
+    ) -> SearchResponse:
+        """RRF（Reciprocal Rank Fusion）倒数排名融合。
+
+        不看原始分数、只看排名：score = Σ 1/(k + rank_i)，rank_i 是文档在第 i 路检索的排名。
+        - 解决 dense（IP 0~1）与 sparse（BM25 无上界）分数尺度不统一、无法直接加权的问题
+        - 对异常分数鲁棒（某一路给错误文档打高分，RRF 只看排名不受影响）
+        - 自适应：谁排得准就听谁的（无需预设 sparse_weight/dense_weight）
+        每个 SearchResult 保留原始 score（供下游 threshold 判断），RRF 只决定最终排序。
+        """
+        docs: dict[str, SearchResult] = {}
+        rrf_scores: dict[str, float] = {}
+
+        for rank, r in enumerate(dense_resp.results, start=1):
+            rrf_scores[r.chunk_id] = rrf_scores.get(r.chunk_id, 0.0) + 1.0 / (k + rank)
+            docs.setdefault(r.chunk_id, r)
+
+        for rank, r in enumerate(sparse_resp.results, start=1):
+            rrf_scores[r.chunk_id] = rrf_scores.get(r.chunk_id, 0.0) + 1.0 / (k + rank)
+            docs.setdefault(r.chunk_id, r)
+
+        ranked = sorted(rrf_scores.items(), key=lambda x: -x[1])
+        results = [docs[cid] for cid, _ in ranked]
+
+        return SearchResponse(
+            query=query,
+            results=results,
+            total_found=len(results),
+            elapsed_ms=round(dense_resp.elapsed_ms + sparse_resp.elapsed_ms, 1),
+            threshold=dense_resp.threshold,
+        )
+
+    def expand_parent_context(
+        self,
+        docs: list[SearchResult],
+        window: int = 1,
+    ) -> list[SearchResult]:
+        """父文档检索补全（Parent Document Retriever 简化版）。
+
+        核心思想：检索用小块精确匹配，回答用大块完整上下文。
+        这里对每个召回的子块，查同 source_file 的相邻 window 个块，拼进 text，
+        避免子块脱离上下文导致 LLM 回答断章取义。
+
+        Args:
+            docs: 检索召回的子块
+            window: 前后各取 window 个相邻块（默认 1）
+
+        Returns:
+            补全父上下文后的结果（text 已含相邻块）
+        """
+        if not docs or window <= 0:
+            return docs
+
+        from collections import defaultdict
+
+        by_source: dict[str, list[SearchResult]] = defaultdict(list)
+        for d in docs:
+            if d.source_file:
+                by_source[d.source_file].append(d)
+
+        expanded: list[SearchResult] = []
+        for source, group in by_source.items():
+            try:
+                all_chunks = self.store.query_chunks_by_source(source)
+            except Exception as e:
+                logger.warning("父块补全失败，原样返回: %s", e)
+                expanded.extend(group)
+                continue
+
+            idx_map = {c["chunk_index"]: c["text"] for c in all_chunks}
+
+            for d in group:
+                ci = (d.metadata or {}).get("chunk_index", 0)
+                neighbors = [
+                    idx_map[ci + offset]
+                    for offset in range(-window, window + 1)
+                    if offset != 0 and (ci + offset) in idx_map
+                ]
+                if neighbors:
+                    d.text = "\n".join(neighbors + [d.text])
+                expanded.append(d)
+
+        return expanded
 
     def search_dual_path(
         self,

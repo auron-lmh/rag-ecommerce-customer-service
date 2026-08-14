@@ -19,10 +19,12 @@ class SemanticSplitter:
     strategy = ChunkStrategy.SEMANTIC
 
     # 句子结束标记（带上下文的正则）
-    SENTENCE_END = re.compile(r"(?<=[。！？\.!\?])\s+(?=[A-Z一-鿿぀-ゟ゠-ヿ])")
+    # 修复: \s+ 要求句末标点后必须有空白，中文「。下一句」无空格导致匹配不到，
+    #       语义分块在中文场景名存实亡。改 \s* 允许零空白。
+    SENTENCE_END = re.compile(r"(?<=[。！？\.!\?])\s*(?=[A-Z一-鿿぀-ゟ゠-ヿ])")
 
     # 子句结束标记（较短停顿）
-    CLAUSE_END = re.compile(r"(?<=[；，;,])\s+(?=[一-鿿A-Z])")
+    CLAUSE_END = re.compile(r"(?<=[；，;,])\s*(?=[一-鿿A-Z])")
 
     def __init__(
         self,

@@ -63,6 +63,18 @@ class _FakeStore:
         self.filters.append(filter_expr)
         return self._resp("")
 
+    def sparse_search(
+        self,
+        query_text,
+        top_k,
+        filter_expr=None,
+        threshold=None,
+        **kwargs,
+    ):
+        self.calls += 1
+        self.filters.append(filter_expr)
+        return self._resp(query_text)
+
 
 def _make_retriever(store=None):
     return Retriever(embedder=_FakeEmbedder(), store=store or _FakeStore())
@@ -109,17 +121,18 @@ class TestCacheKeyIsolation:
         monkeypatch.setattr("src.embedding.retriever._get_cache", lambda: cache)
 
         r.search("退货政策", use_rerank=False, access_level="vip")  # vip 检索写入缓存
-        assert store.calls == 1
+        # use_hybrid 默认 True → RRF 调 dense + sparse 各 1 次 = 2
+        assert store.calls == 2
 
         r.search(
             "退货政策", use_rerank=False, access_level="member"
         )  # member 不得命中 vip 缓存
-        assert store.calls == 2  # 重新走 Milvus，带 member 过滤
+        assert store.calls == 4  # 重新走 Milvus，带 member 过滤
 
         r.search(
             "退货政策", use_rerank=False, access_level="member"
         )  # member 再查 → 命中自己缓存
-        assert store.calls == 2  # 未再触发 Milvus
+        assert store.calls == 4  # 未再触发 Milvus
 
 
 class TestDualPathAndBatch:
